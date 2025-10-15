@@ -1,6 +1,8 @@
 #include "CartesianPositionController.h"
 #include <deque>
-#include <sensor_msgs/Joy.h>
+#include <geometry_msgs/msg/point.hpp>
+#include <std_msgs/msg/string.hpp>
+#include <rclcpp/rclcpp.hpp>
 
 #include <fstream>
 #include <deque>
@@ -8,6 +10,10 @@
 #include <sstream>
 #include <algorithm>
 #include <iterator>
+#include <chrono>
+
+// Forward declare the node pointer
+std::shared_ptr<rclcpp::Node> g_node;
 
 /*
     function called on a shutdown of this node.
@@ -15,42 +21,26 @@
 void on_shutdown(int sig) {
     CartesianPositionController endController(true);
     endController.setVelocitiesToZero();
-    ros::shutdown();
+    rclcpp::shutdown();
 }
 
 Eigen::Vector3d goalPosG = Eigen::Vector3d(0.5, 0, 0.35);
 Eigen::Vector4d xboxVals = Eigen::Vector4d(0, 0, 0, 0);
 
 
-void setAvoidanceMode(CartesianPositionController &controller, ros::NodeHandle nh){
+void setAvoidanceMode(CartesianPositionController &controller, std::shared_ptr<rclcpp::Node> node){
 
     std::string control_mode;
-    nh.getParam("/avoidance_controller/avoidance_type", control_mode);
-    ROS_INFO("Got parameter : %s", control_mode.c_str());
-    if (control_mode == "" || control_mode == "none"){
-        ROS_INFO("No avoidance selected");
-        controller.setAvoidanceMode(noAvoidance);
-    } else if (control_mode == "flacco"){
-        ROS_INFO("flacco avoidance selected");
-        controller.setAvoidanceMode(Flacco);
-    } else if (control_mode == "ding"){
-        ROS_INFO("ding avoidance selected");
-        controller.setAvoidanceMode(Ding);
-    } else if (control_mode == "hiro"){
-        ROS_INFO("hiro avoidance selected");
-        controller.setAvoidanceMode(HIRO);
-    } else if (control_mode == "HIROCollaborative"){
-        ROS_INFO("HIRO *collaborative* controller selected");
-        controller.setAvoidanceMode(HIROCollaborative);
-    } else{
-        ROS_ERROR("Mode entered is not valid");
-        ros::shutdown();
-    }
-
+    node->declare_parameter("/avoidance_controller/avoidance_type", "");
+    node->get_parameter("/avoidance_controller/avoidance_type", control_mode);
+    RCLCPP_INFO(node->get_logger(), "Got parameter : %s", control_mode.c_str());
+    RCLCPP_INFO(node->get_logger(), "hiro avoidance selected");
+    controller.setAvoidanceMode(HIRO);
 }
-void moveSequenceOfPositions(CartesianPositionController &controller, std::string positions_filename, ros::NodeHandle &nh){
 
-    ros::Publisher gripper_pub = nh.advertise<std_msgs::String>("/hiro_sequence",1);
+void moveSequenceOfPositions(CartesianPositionController &controller, std::string positions_filename, std::shared_ptr<rclcpp::Node> node){
+
+    auto gripper_pub = node->create_publisher<std_msgs::msg::String>("/hiro_sequence", 1);
 
     while(true){
         std::ifstream in(positions_filename);
@@ -71,10 +61,10 @@ void moveSequenceOfPositions(CartesianPositionController &controller, std::strin
         // If this value is true then pause the movement of the robot for a moment and issue a grab action
         if(cartesian_position[5]){
             //Publish a grasp and sleep for 2 sec
-            std_msgs::String msg;
+            std_msgs::msg::String msg;
             msg.data = "swap_gripper_state";
-            gripper_pub.publish(msg);
-            ros::Duration(2.0).sleep();
+            gripper_pub->publish(msg);
+            rclcpp::sleep_for(std::chrono::seconds(2));
 
         }else{
             while (positionError.norm() > 0.005){
@@ -90,102 +80,17 @@ void moveSequenceOfPositions(CartesianPositionController &controller, std::strin
     controller.setVelocitiesToZero();
 }
 
-void xboxStateCallback(const sensor_msgs::Joy::ConstPtr& joy){
-    ROS_INFO("Xbox Callback!");
-    std::cout << "x: " << joy->axes[0] << "  y: " << joy->axes[1] << "  z: " << joy->axes[4] << std::endl;
-    xboxVals = Eigen::Vector4d(joy->axes[0], joy->axes[1], joy->axes[4], 0);
-}
+void desiredStateCallback(const geometry_msgs::msg::Point::SharedPtr msg){
+    RCLCPP_INFO(g_node->get_logger(), "desiredStateCallback");
+    std::cout << "x: " << msg->x << "  y: " << msg->y << "  z: " << msg->z << std::endl;
+    goalPosG = Eigen::Vector3d(msg->x, msg->y, msg->z);
 
-void desiredStateCallback(const geometry_msgs::Point& msg){
-    ROS_INFO("desiredStateCallback");
-    std::cout << "x: " << msg.x << "  y: " << msg.y << "  z: " << msg.z << std::endl;
-    goalPosG = Eigen::Vector3d(msg.x, msg.y, msg.z);
-
-}
-void xboxController(CartesianPositionController &controller){
-
-    //controller.moveToPosition(goalPosG);
-    ros::Rate r(1);
-
-    Eigen::Vector3d trajectory, endEffectorPosition, positionError;
-    Eigen::Vector3d goal = Eigen::Vector3d(0.5, 0, 0.6);
-    endEffectorPosition = controller.getEEPosition();
-
-    // good version
-    float p_gain = 0.45;
-    float i_gain = 0.18;
-    float d_gain = 0.0;
-
-    Eigen::Vector3d prev_error;
-    Eigen::Vector3d cum_error = Eigen::Vector3d(0, 0, 0);
-    float max_vel = 0;
-
-    Eigen::Vector3d desiredEEVelocity;
-
-    ros::Time start_of_movement = ros::Time::now();
-    ros::Time cur_time = start_of_movement;
-
-    ros::Rate rate{100.0};
-
-    // increment
-    bool done = false;
-    float error;
-    ros::Duration cur_time_duration = ros::Duration(0);
-    double delta_time = 0.01;
-    double total_error = 0.0;
-    double prev = 0;
-    Eigen::Vector3d controller_output;
-    Eigen::Vector3d prev_output;
-    Eigen::Vector3d acc;
-
-    int i = 0;
-
-    while (true)
-    {
-        endEffectorPosition = controller.getEEPosition();
-        goalPosG = Eigen::Vector3d(endEffectorPosition(0) + xboxVals(1) * 0.3 ,  endEffectorPosition(1) + xboxVals(0) * 0.3, endEffectorPosition(2) + xboxVals(2) * 0.3);
-        std::cout << goalPosG(0) << std::endl;
-        error = abs((goalPosG - endEffectorPosition).norm());
-        endEffectorPosition = controller.getEEPosition();
-
-        // desired velocity
-        desiredEEVelocity = (goalPosG - endEffectorPosition) / (0.01 * 5); // limit ee velocity
-        // proportional error
-        Eigen::Vector3d p_error = (goalPosG - endEffectorPosition);
-        // integral error
-        cum_error += (p_error * 0.01);
-        Eigen::Vector3d i_error = (cum_error);
-        // derivative error
-        Eigen::Vector3d d_error = (p_error - prev_error) / 0.01 ;
-        if (i == 0)
-        {
-            d_error = Eigen::Vector3d(0, 0, 0);
-        }
-
-
-        // controller_output = (p_gain * p_error) + (i_gain * i_error) + (d_error * d_gain);
-        controller_output = (p_gain * p_error);
-        double norm = controller_output.norm();
-        acc = (controller_output - prev_output) / 0.01;
-
-        controller.commandVelocityOneStep(controller_output, goalPosG);
-        // controller.moveToPositionOneStep(goalPosG);
-
-        cur_time_duration = (ros::Time::now() - start_of_movement);
-        delta_time = cur_time_duration.toSec() - prev;
-        prev = cur_time_duration.toSec();
-        i++;
-        prev_error = p_error;
-        prev_output = controller_output;
-        // r.sleep();
-
-    }
 }
 
 void moveToSubPoints(CartesianPositionController &controller){
     //
     //controller.moveToPosition(goalPosG);
-    ros::Rate r(1);
+    rclcpp::Rate r(1);
 
     Eigen::Vector3d trajectory, endEffectorPosition, positionError;
     Eigen::Vector3d goal = Eigen::Vector3d(0.5, 0, 0.6);
@@ -203,15 +108,15 @@ void moveToSubPoints(CartesianPositionController &controller){
 
     Eigen::Vector3d desiredEEVelocity;
 
-    ros::Time start_of_movement = ros::Time::now();
-    ros::Time cur_time = start_of_movement;
+    rclcpp::Time start_of_movement = g_node->now();
+    rclcpp::Time cur_time = start_of_movement;
 
-    ros::Rate rate{100.0};
+    rclcpp::Rate rate{100.0};
 
     // increment
     bool done = false;
     float error;
-    ros::Duration cur_time_duration = ros::Duration(0);
+    rclcpp::Duration cur_time_duration = rclcpp::Duration::from_seconds(0);
     double delta_time = 0.01;
     double total_error = 0.0;
     double prev = 0;
@@ -249,9 +154,9 @@ void moveToSubPoints(CartesianPositionController &controller){
 
         controller.commandVelocityOneStep(controller_output, goalPosG);
 
-        cur_time_duration = (ros::Time::now() - start_of_movement);
-        delta_time = cur_time_duration.toSec() - prev;
-        prev = cur_time_duration.toSec();
+        cur_time_duration = (g_node->now() - start_of_movement);
+        delta_time = cur_time_duration.seconds() - prev;
+        prev = cur_time_duration.seconds();
         i++;
         prev_error = p_error;
         prev_output = controller_output;
@@ -265,7 +170,6 @@ void moveToSubPoints(CartesianPositionController &controller){
     Move the robot in a circle
 */
 void moveInCircle(CartesianPositionController &controller, double timeToComplete){
-    LoggingPublisher logPublisher;
     double radius = 0.4;
     Eigen::Vector3d start_pos = Eigen::Vector3d(0.5, radius, 0.35);
     controller.moveToPosition(start_pos);
@@ -281,10 +185,10 @@ void moveInCircle(CartesianPositionController &controller, double timeToComplete
     bool circle_complete = false;
     // double time_diff;
     // double end_time;
-    // ros::Time start_of_movement = ros::Time::now();
+    // rclcpp::Time start_of_movement = g_node->now();
 
 
-    ros::Rate rate{100.0};
+    rclcpp::Rate rate{100.0};
     trajectory = Eigen::Vector3d(x, y, z);
     // increment
     double inc = (M_PI * 2.0) / (timeToComplete * 100.0);
@@ -308,11 +212,9 @@ void moveInCircle(CartesianPositionController &controller, double timeToComplete
         positionError = center - endEffectorPosition;
 
         float error = abs(positionError.norm() - radius);
-        // utilize logging publisher - publish ee pos
-        logPublisher.publishEE_Error(error);
-        // logPublisher.publishEEPath(endEffectorPosition);
-        logPublisher.publishEEPath(trajectory);
-        logPublisher.publishEETrajectory(endEffectorPosition, theta);
+        // Note: Logging removed - was: logPublisher.publishEE_Error(error);
+        // Note: Logging removed - was: logPublisher.publishEEPath(trajectory);
+        // Note: Logging removed - was: logPublisher.publishEETrajectory(endEffectorPosition, theta);
         // rate.sleep();
     }
     controller.setVelocitiesToZero();
@@ -336,15 +238,15 @@ void holdStaticPose(CartesianPositionController &controller){
 
     Eigen::Vector3d desiredEEVelocity;
 
-    ros::Time start_of_movement = ros::Time::now();
-    ros::Time cur_time = start_of_movement;
+    rclcpp::Time start_of_movement = g_node->now();
+    rclcpp::Time cur_time = start_of_movement;
 
-    ros::Rate rate{100.0};
+    rclcpp::Rate rate{100.0};
 
     // increment
     bool done = false;
     float error;
-    ros::Duration cur_time_duration = ros::Duration(0);
+    rclcpp::Duration cur_time_duration = rclcpp::Duration::from_seconds(0);
     double delta_time = 0.01;
     double total_error = 0.0;
     double prev = 0;
@@ -383,9 +285,9 @@ void holdStaticPose(CartesianPositionController &controller){
 
         controller.moveToPositionOneStep(goal);
 
-        cur_time_duration = (ros::Time::now() - start_of_movement);
-        delta_time = cur_time_duration.toSec() - prev;
-        prev = cur_time_duration.toSec();
+        cur_time_duration = (g_node->now() - start_of_movement);
+        delta_time = cur_time_duration.seconds() - prev;
+        prev = cur_time_duration.seconds();
         i++;
         prev_error = p_error;
         prev_output = controller_output;
@@ -438,10 +340,10 @@ void moveInCircleV2(CartesianPositionController &controller, double timeToComple
     double z = start_pos(2) + radius * std::sin(theta);
     bool circle_complete = false;
 
-    ros::Time start_of_movement = ros::Time::now();
-    ros::Time cur_time = start_of_movement;
+    rclcpp::Time start_of_movement = g_node->now();
+    rclcpp::Time cur_time = start_of_movement;
 
-    ros::Rate rate{100.0};
+    rclcpp::Rate rate{100.0};
     trajectory = Eigen::Vector3d(x, y, z);
 
     // increment
@@ -449,7 +351,7 @@ void moveInCircleV2(CartesianPositionController &controller, double timeToComple
     double inc = (M_PI * 2.0) / (timeToComplete * 100.0);
     bool done = false;
     float error;
-    ros::Duration cur_time_duration = ros::Duration(0);
+    rclcpp::Duration cur_time_duration = rclcpp::Duration::from_seconds(0);
     double delta_time = 0.01;
     double total_error = 0.0;
     double prev = 0;
@@ -469,7 +371,7 @@ void moveInCircleV2(CartesianPositionController &controller, double timeToComple
         endEffectorPosition = controller.getEEPosition();
         error = abs((trajectory - endEffectorPosition).norm());
         total_error = total_error + error;
-        float t = (start_of_movement.toSec() + amt);
+        float t = (rclcpp::Time(start_of_movement).seconds() + amt);
         y = radius * std::cos(b * t);
         z = start_pos(2) + radius * std::sin(b * t);
         prev_trajectory = trajectory;
@@ -511,9 +413,9 @@ void moveInCircleV2(CartesianPositionController &controller, double timeToComple
         }
 
         controller.commandVelocityOneStep(controller_output, trajectory);
-        cur_time_duration = (ros::Time::now() - start_of_movement);
-        delta_time = cur_time_duration.toSec() - prev;
-        prev = cur_time_duration.toSec();
+        cur_time_duration = (g_node->now() - start_of_movement);
+        delta_time = cur_time_duration.seconds() - prev;
+        prev = cur_time_duration.seconds();
         i++;
         amt = amt + 0.01;
         prev_error = p_error;
@@ -546,9 +448,9 @@ void moveInLine(CartesianPositionController &controller, double time_to_complete
     bool done = false;
     double end_time;
     Eigen::Vector3d trajectory;
-    ros::Time now;
-    ros::Time start = ros::Time::now();
-    ros::Time start_of_movement = start;
+    rclcpp::Time now;
+    rclcpp::Time start = g_node->now();
+    rclcpp::Time start_of_movement = start;
     Eigen::Vector3d goal;
     Eigen::Vector3d endEffectorPosition, positionError;
 
@@ -561,8 +463,8 @@ void moveInLine(CartesianPositionController &controller, double time_to_complete
         positionError = goal - endEffectorPosition;
 
         // Update time
-        now = ros::Time::now();
-        end_time = (now - start_of_movement).toSec();
+        now = g_node->now();
+        end_time = (now - start_of_movement).seconds();
 
         //Check if over time
         if (end_time >= time_to_complete) done = true;
@@ -575,7 +477,7 @@ void moveInLine(CartesianPositionController &controller, double time_to_complete
             if (positionError.squaredNorm() < error_threshold) {
                 goal = start_pos;
                 negative_direction = false;
-                start = ros::Time::now();
+                start = g_node->now();
             }
         }
         else
@@ -583,79 +485,80 @@ void moveInLine(CartesianPositionController &controller, double time_to_complete
             if (positionError.squaredNorm() < error_threshold) {
                 goal = goal_pos;
                 negative_direction = true;
-                start = ros::Time::now();
+                start = g_node->now();
             }
         }
     }
     controller.setVelocitiesToZero();
 }
 
-bool getSimParam(ros::NodeHandle &nh){
+bool getSimParam(std::shared_ptr<rclcpp::Node> node){
 
     bool is_sim;
-    nh.getParam("/is_sim", is_sim);
+    node->declare_parameter("/is_sim", false);
+    node->get_parameter("/is_sim", is_sim);
     if (is_sim){
-        ROS_INFO("Simulation: True");
+        RCLCPP_INFO(node->get_logger(), "Simulation: True");
         return true;
     } else if (!is_sim){
-        ROS_INFO("Simulation: False");
+        RCLCPP_INFO(node->get_logger(), "Simulation: False");
         return false;
     } else{
-        ROS_ERROR("is_sim is not set, please set this variable to: true or false");
-        ros::shutdown();
+        RCLCPP_ERROR(node->get_logger(), "is_sim is not set, please set this variable to: true or false");
+        rclcpp::shutdown();
     }
 }
 
-void moveRobot(CartesianPositionController &controller, ros::NodeHandle nh){
+void moveRobot(CartesianPositionController &controller, std::shared_ptr<rclcpp::Node> node){
 
     std::string movement_mode;
-    nh.getParam("/avoidance_controller/movement_type", movement_mode);
+    node->declare_parameter("/avoidance_controller/movement_type", "");
+    node->get_parameter("/avoidance_controller/movement_type", movement_mode);
     if (movement_mode == "line"){
-        ROS_INFO("Move in line");
+        RCLCPP_INFO(node->get_logger(), "Move in line");
         moveInLine(controller, 10);
     } else if (movement_mode == "circle"){
-        ROS_INFO("Move in circle");
+        RCLCPP_INFO(node->get_logger(), "Move in circle");
         moveInCircle(controller, 5);
     } else if (movement_mode == "circlev2"){
-        ROS_INFO("Move in circle v2");
+        RCLCPP_INFO(node->get_logger(), "Move in circle v2");
         moveInCircleV2(controller, 10);
     } else if(movement_mode == "static"){
-        ROS_INFO("static position");
+        RCLCPP_INFO(node->get_logger(), "static position");
         holdStaticPose(controller);
     } else if(movement_mode == "send_xyz"){
-        ROS_INFO("Send xyz geometry point message to /panda_desired_pos_xyz");
+        RCLCPP_INFO(node->get_logger(), "Send xyz geometry point message to /panda_desired_pos_xyz");
         moveToSubPoints(controller);
-    }else if(movement_mode == "xbox"){
-        ROS_INFO("xbox controller mode set");
-        xboxController(controller);
     }else if(movement_mode == "sequence"){
-        ROS_INFO("sequence mode set");
-        moveSequenceOfPositions(controller, "/home/panda/panda_positions.txt", nh);
+        RCLCPP_INFO(node->get_logger(), "sequence mode set");
+        moveSequenceOfPositions(controller, "/home/panda/panda_positions.txt", node);
     }else{
-        ROS_ERROR("No movement mode selected");
-        ros::shutdown();
+        RCLCPP_ERROR(node->get_logger(), "No movement mode selected");
+        rclcpp::shutdown();
     }
 }
 
 
 int main(int argc, char **argv){
-    ros::init(argc, argv, "CartesianPositionController", ros::init_options::NoSigintHandler);
-    ros::NodeHandle nh("~");
+    rclcpp::init(argc, argv);
+    g_node = std::make_shared<rclcpp::Node>("CartesianPositionController");
     signal(SIGINT, on_shutdown);
-    ros::Subscriber subscriberCartPos_xyz = nh.subscribe("/panda_desired_pos_xyz", 1, &desiredStateCallback);
-    ros::Subscriber subscriberJoyXbox = nh.subscribe("/joy", 1, &xboxStateCallback);
+    // auto subscriberCartPos_xyz = g_node->create_subscription<geometry_msgs::msg::Point>(
+    //     "/panda_desired_pos_xyz", 1, &desiredStateCallback);
+    // auto subscriberJoyXbox = g_node->create_subscription<sensor_msgs::msg::Joy>(
+    //     "/joy", 1, &xboxStateCallback);
     
 
-    bool isSim = getSimParam(nh);
+    bool isSim = getSimParam(g_node);
 
 
-    CartesianPositionController controller(isSim, nh);
+    CartesianPositionController controller(isSim, g_node);
 
     //TODO: Make the avoidance mode a controller function
-    setAvoidanceMode(controller, nh);
+    setAvoidanceMode(controller, g_node);
 
     //This is dependent on the argument set in the launch file
-    moveRobot(controller, nh);
+    moveRobot(controller, g_node);
 
     return 0;
 }
