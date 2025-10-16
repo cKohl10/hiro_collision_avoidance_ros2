@@ -16,6 +16,7 @@ class JointVelocityController
         JointVelocityController(bool isSim);
         ~JointVelocityController();
         void sendVelocities(const Eigen::VectorXd velocities);
+        void initialize(const std::shared_ptr<rclcpp::Node>& node, std::string arm_id);
 
     private:
         // variable
@@ -26,7 +27,7 @@ class JointVelocityController
         rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr realVelocityPublisher;
         std_msgs::msg::Float64 msg;
         std_msgs::msg::Float64MultiArray msgarray;
-
+        std::string arm_id;
         // functions
         void _switchController(bool isSim);
         void _prepareSimVelocityPublisher();

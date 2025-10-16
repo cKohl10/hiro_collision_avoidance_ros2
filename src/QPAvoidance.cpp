@@ -141,7 +141,7 @@ void QPAvoidance::calculateJointVelocityBounds(Eigen::VectorXd& lowerBound, Eige
 }
 
 void QPAvoidance::setupOptimizationMainTask(Eigen::MatrixXd& H, Eigen::VectorXd& f, const Eigen::VectorXd& q, const Eigen::Vector3d& xDot){
-    Eigen::MatrixXd J = kdlSolver.computeJacobian(std::string("panda_EE"), q).block(0,0,3,7);
+    Eigen::MatrixXd J = kdlSolver.computeJacobian(kdlSolver.getEELink(), q).block(0,0,3,7);
     Eigen::MatrixXd Jpinv = J.completeOrthogonalDecomposition().pseudoInverse();
 
     double manipulability_measure = std::sqrt((J*J.transpose()).determinant());

@@ -56,7 +56,6 @@ class CartesianPositionController {
     rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr subscriberExternalCartesianWrenchRaw;
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr test_pub;
 
-
     bool robotInContact = false;
 
     rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr ee_xyz_publisher;
@@ -70,6 +69,7 @@ class CartesianPositionController {
     std::vector<KDLSolver::closest_point> closestPointsOnRobot;
     KDLSolver kdlSolver;
     std::mutex mutex;
+    std::string ee_link_name_;
 
 
     Eigen::Vector3d EEVelocity;

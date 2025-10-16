@@ -33,6 +33,7 @@ protected:
 
 public:
     CollisionAvoidanceBase();
+    // void initializeKDL(std::shared_ptr<rclcpp::Node> node);
     KDLSolver kdlSolver;
     Eigen::VectorXd qDot{7};
 

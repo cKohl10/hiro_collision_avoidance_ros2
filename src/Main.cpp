@@ -31,11 +31,20 @@ Eigen::Vector4d xboxVals = Eigen::Vector4d(0, 0, 0, 0);
 void setAvoidanceMode(CartesianPositionController &controller, std::shared_ptr<rclcpp::Node> node){
 
     std::string control_mode;
-    node->declare_parameter("/avoidance_controller/avoidance_type", "");
-    node->get_parameter("/avoidance_controller/avoidance_type", control_mode);
-    RCLCPP_INFO(node->get_logger(), "Got parameter : %s", control_mode.c_str());
-    RCLCPP_INFO(node->get_logger(), "hiro avoidance selected");
-    controller.setAvoidanceMode(HIRO);
+    node->declare_parameter("avoidance_type", "hiro");
+    node->get_parameter("avoidance_type", control_mode);
+    RCLCPP_INFO(node->get_logger(), "Got avoidance_type parameter: %s", control_mode.c_str());
+    
+    if (control_mode == "hiro") {
+        controller.setAvoidanceMode(HIRO);
+        RCLCPP_INFO(node->get_logger(), "HIRO avoidance selected");
+    } else if (control_mode == "none") {
+        controller.setAvoidanceMode(noAvoidance);
+        RCLCPP_INFO(node->get_logger(), "No avoidance selected");
+    } else {
+        RCLCPP_WARN(node->get_logger(), "Unknown avoidance type: %s, defaulting to HIRO", control_mode.c_str());
+        controller.setAvoidanceMode(HIRO);
+    }
 }
 
 void moveSequenceOfPositions(CartesianPositionController &controller, std::string positions_filename, std::shared_ptr<rclcpp::Node> node){
@@ -495,25 +504,21 @@ void moveInLine(CartesianPositionController &controller, double time_to_complete
 bool getSimParam(std::shared_ptr<rclcpp::Node> node){
 
     bool is_sim;
-    node->declare_parameter("/is_sim", false);
-    node->get_parameter("/is_sim", is_sim);
+    node->declare_parameter("is_sim", false);
+    node->get_parameter("is_sim", is_sim);
     if (is_sim){
         RCLCPP_INFO(node->get_logger(), "Simulation: True");
-        return true;
-    } else if (!is_sim){
+    } else {
         RCLCPP_INFO(node->get_logger(), "Simulation: False");
-        return false;
-    } else{
-        RCLCPP_ERROR(node->get_logger(), "is_sim is not set, please set this variable to: true or false");
-        rclcpp::shutdown();
     }
+    return is_sim;
 }
 
 void moveRobot(CartesianPositionController &controller, std::shared_ptr<rclcpp::Node> node){
 
     std::string movement_mode;
-    node->declare_parameter("/avoidance_controller/movement_type", "");
-    node->get_parameter("/avoidance_controller/movement_type", movement_mode);
+    node->declare_parameter("movement_type", "");
+    node->get_parameter("movement_type", movement_mode);
     if (movement_mode == "line"){
         RCLCPP_INFO(node->get_logger(), "Move in line");
         moveInLine(controller, 10);
@@ -548,17 +553,26 @@ int main(int argc, char **argv){
     // auto subscriberJoyXbox = g_node->create_subscription<sensor_msgs::msg::Joy>(
     //     "/joy", 1, &xboxStateCallback);
     
+    RCLCPP_INFO(g_node->get_logger(), "Main node initialized");
 
     bool isSim = getSimParam(g_node);
+
+    RCLCPP_INFO(g_node->get_logger(), "Simulation: %d", isSim);
 
 
     CartesianPositionController controller(isSim, g_node);
 
+    RCLCPP_INFO(g_node->get_logger(), "Controller initialized");
+
     //TODO: Make the avoidance mode a controller function
     setAvoidanceMode(controller, g_node);
 
+    RCLCPP_INFO(g_node->get_logger(), "Avoidance mode set");
+
     //This is dependent on the argument set in the launch file
     moveRobot(controller, g_node);
+
+    RCLCPP_INFO(g_node->get_logger(), "Robot moved");
 
     return 0;
 }

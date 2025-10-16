@@ -15,6 +15,9 @@ class KDLSolver {
  private:
     std::shared_ptr<rclcpp::Node> n;
     std::string robot_desc_string;
+    std::string arm_id_;
+    std::string base_link_;
+    std::string ee_link_;
     KDL::Tree kdlTree;
     std::unique_ptr<KDL::Chain[]> kdlChainsControlPoints;
     std::unique_ptr<KDL::Chain[]> kdlChainsJoints;
@@ -32,12 +35,15 @@ public:
     };
 
     KDLSolver();
+    // Initialize from ROS 2 node and build the KDL tree; returns true on success
+    bool initialize(const std::shared_ptr<rclcpp::Node> & node, const std::string & arm_id = "fr3");
     Eigen::MatrixXd computeJacobian(std::string controlPointName, Eigen::VectorXd q);
     Eigen::MatrixXd computeJacobian2(KDLSolver::closest_point& controlPoint, Eigen::VectorXd& q);
     Eigen::MatrixXd forwardKinematicsJoints(const Eigen::VectorXd & q);
     Eigen::Vector3d forwardKinematicsControlPoints(std::string controlPointName, Eigen::VectorXd q);
     Eigen::Vector3d forwardKinematics(KDLSolver::closest_point& controlPoint, Eigen::VectorXd& q);
     int getNumberControlPoints();
+    std::string getEELink() const;
 
 
 };

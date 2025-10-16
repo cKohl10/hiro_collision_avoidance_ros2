@@ -184,8 +184,7 @@ void CartesianPositionController::readEndEffectorPosition(){
     while (rclcpp::ok()){
         try{
             // get transform betwen world frame and end effector frame
-            // TODO: Naming convention for fr3
-            auto transform = tf_buffer->lookupTransform("/world", "/panda_EE", tf2::TimePointZero);
+            auto transform = tf_buffer->lookupTransform("map", ee_link_name_, tf2::TimePointZero);
             endEffectorPosition << transform.transform.translation.x,
                                          transform.transform.translation.y,
                                          transform.transform.translation.z;
@@ -236,7 +235,7 @@ Eigen::VectorXd CartesianPositionController::EEVelocityToQDot(Eigen::Vector3d de
 
     // compute the jacobian
     // TODO: Naming convention for fr3
-    J = kdlSolver.computeJacobian(std::string("panda_EE"), q);
+    J = kdlSolver.computeJacobian(kdlSolver.getEELink(), q);
     // reshape jacobian
     // TODO: Why do we reshape the J in this way?
     J = J.block(0,0,3,7);
@@ -285,7 +284,7 @@ Eigen::VectorXd CartesianPositionController::EEVelocityToQDotRepulsive(Eigen::Ve
 
     // compute the jacobian
     // TODO: Naming convention for fr3
-    J = kdlSolver.computeJacobian(std::string("panda_EE"), q);
+    J = kdlSolver.computeJacobian(kdlSolver.getEELink(), q);
     J = J.block(0,0,3,7);
     // get the pseudoinverse of the jacobian in order to get
     Jpinv = J.completeOrthogonalDecomposition().pseudoInverse();
@@ -296,8 +295,7 @@ Eigen::VectorXd CartesianPositionController::EEVelocityToQDotRepulsive(Eigen::Ve
 }
 
 Eigen::Vector3d CartesianPositionController::getEEVelocity(){
-    // TODO: Naming convention for fr3
-    J = kdlSolver.computeJacobian(std::string("panda_EE"), q).block(0, 0, 3, 7);
+    J = kdlSolver.computeJacobian(kdlSolver.getEELink(), q).block(0, 0, 3, 7);
     return J * current_Qdot;
 }
 
@@ -339,12 +337,25 @@ Eigen::Vector3d CartesianPositionController::getClosestPointOnLine(Eigen::Vector
 // Public Functions
 CartesianPositionController::CartesianPositionController(
     bool isSim, std::shared_ptr<rclcpp::Node> node_handle) {
-  this->isSim = isSim;
   this->n = node_handle;
+  this->isSim = isSim;
+  RCLCPP_INFO(n->get_logger(), "JointVelocityController initializing");
   this->jointVelocityController = JointVelocityController(isSim);
+  this->jointVelocityController.initialize(n, "fr3");
+  RCLCPP_INFO(n->get_logger(), "JointVelocityController initialized");
 
-  getControlPoints();
-  setJointLimits(node_handle);
+  // Initialize KDL solver from URDF (robot_description)
+  if (!kdlSolver.initialize(n, "fr3")) {
+    RCLCPP_ERROR(n->get_logger(), "Failed to initialize KDLSolver from robot_description");
+  }
+
+  // Initialize TF buffer/listener for EE pose lookups
+  tf_buffer = std::make_shared<tf2_ros::Buffer>(n->get_clock());
+  tf_listener = std::make_shared<tf2_ros::TransformListener>(*tf_buffer);
+
+  setJointLimits(node_handle);  // Initialize KDL first
+  getControlPoints();           // Then use it to get control points
+  ee_link_name_ = kdlSolver.getEELink();  // Store EE link name for TF lookups
   createRosPubsSubs();
 
   // TODO: Set previous velocities to zero
@@ -355,6 +366,7 @@ CartesianPositionController::CartesianPositionController(
   // TODO: Set values used for PID control, can we do this somewhere else?
   this->cumulative_error = 0;
   this->derivative_error = 0;
+  RCLCPP_INFO(n->get_logger(), "CartesianPositionController initialized successfully");
 }
 
 CartesianPositionController::CartesianPositionController(bool isSim = true) {
