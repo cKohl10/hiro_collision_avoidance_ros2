@@ -472,7 +472,10 @@ void CartesianPositionController::moveToPosition(Eigen::Vector3d desiredPosition
         }
         joint_positions = kdlSolver.forwardKinematicsJoints(q);
         positionError = desiredPosition - endEffectorPosition;
-        RCLCPP_INFO(n->get_logger(), "Position error: %f, %f, %f", positionError(0), positionError(1), positionError(2));
+        // RCLCPP_INFO(n->get_logger(), "Current position: %f, %f, %f", endEffectorPosition(0), endEffectorPosition(1), endEffectorPosition(2));
+        // RCLCPP_INFO(n->get_logger(), "Desired position: %f, %f, %f", desiredPosition(0), desiredPosition(1), desiredPosition(2));
+        // RCLCPP_INFO(n->get_logger(), "Position error: %f, %f, %f", positionError(0), positionError(1), positionError(2));
+        // RCLCPP_INFO(n->get_logger(), "Joint positions: %f, %f, %f, %f, %f, %f, %f", joint_positions(0), joint_positions(1), joint_positions(2), joint_positions(3), joint_positions(4), joint_positions(5), joint_positions(6));
         if (positionError.norm() < 0.25)
         {
             desiredEEVelocity = positionError.norm() * positionError.normalized();
@@ -498,6 +501,7 @@ void CartesianPositionController::moveToPosition(Eigen::Vector3d desiredPosition
                 // qDot = hiroAvoidance.computeJointVelocities(q, desiredEEVelocity,
                 //                                             obstaclePositionVectors,
                 //                                             closestPointsOnRobot, rate, endEffectorPosition, desiredPosition, arrow_publisher);
+                RCLCPP_INFO(n->get_logger(), "Desired EE velocity: %f, %f, %f", desiredEEVelocity(0), desiredEEVelocity(1), desiredEEVelocity(2));
                 EEVelocity = getEEVelocity();
                 qDot = hiroAvoidance.computeJointVelocitiesWithExtCartForce(q, desiredEEVelocity,
                                                         externalCartesianForce,
@@ -505,6 +509,10 @@ void CartesianPositionController::moveToPosition(Eigen::Vector3d desiredPosition
                                                         obstaclePositionVectors,
                                                         closestPointsOnRobot, rate, endEffectorPosition, desiredPosition, EEVelocity,
                                                         inContact);
+                // invert the indices of the qDot vector
+                // qDot = qDot.reverse();
+                RCLCPP_INFO(n->get_logger(), "Joint velocities: %f, %f, %f, %f, %f, %f, %f", qDot(0), qDot(1), qDot(2), qDot(3), qDot(4), qDot(5), qDot(6));
+                RCLCPP_INFO(n->get_logger(), "Joint positions: %f, %f, %f, %f, %f, %f, %f", q(0), q(1), q(2), q(3), q(4), q(5), q(6));
                 jointVelocityController.sendVelocities(qDot);
                 break;
             }

@@ -10,11 +10,13 @@
 #include "kdl/jacobian.hpp"
 #include "kdl/chainjnttojacsolver.hpp"
 #include "kdl/chainfksolverpos_recursive.hpp"
+#include "std_msgs/msg/string.hpp"
 
 class KDLSolver {
  private:
     std::shared_ptr<rclcpp::Node> n;
     std::string robot_desc_string;
+    rclcpp::Subscription<std_msgs::msg::String>::SharedPtr robot_description_sub_;
     std::string arm_id_;
     std::string base_link_;
     std::string ee_link_;

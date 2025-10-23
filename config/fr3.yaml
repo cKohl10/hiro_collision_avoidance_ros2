@@ -1,0 +1,6 @@
+/**:
+  ros__parameters:
+    namespace: ""
+    arm_id: "fr3"
+    base_link: "fr3_link0"
+    ee_link: "fr3_link8"
