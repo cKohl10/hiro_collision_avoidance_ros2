@@ -19,6 +19,7 @@ JointVelocityController::JointVelocityController(bool isSim=true) {
 
 void JointVelocityController::initialize(const std::shared_ptr<rclcpp::Node>& node, std::string arm_id){
     n = node;
+    this->arm_id = arm_id;
     RCLCPP_INFO(n->get_logger(), "JointVelocityController initializing in initialize function");
     // Switches to a proper controller depending on sim / real robot
     _switchController(isSim);
@@ -112,10 +113,18 @@ void JointVelocityController::sendVelocities(const Eigen::VectorXd velocities){
     }
 
     if (this->isSim){
+        static uint32_t log_counter = 0;
+        if ((log_counter++ % 200) == 0) {
+            RCLCPP_INFO(n->get_logger(), "Sending sim velocities");
+        }
         _sendSimVelocities(velocities);
         // _sendRealVelocities(velocities);
 
     } else {
+        static uint32_t log_counter = 0;
+        if ((log_counter++ % 200) == 0) {
+            RCLCPP_INFO(n->get_logger(), "Sending real velocities");
+        }
         _sendRealVelocities(velocities);
     }
 }

@@ -572,7 +572,6 @@ int main(int argc, char **argv){
     //This is dependent on the argument set in the launch file
     moveRobot(controller, g_node);
 
-    RCLCPP_INFO(g_node->get_logger(), "Robot moved");
 
     return 0;
 }

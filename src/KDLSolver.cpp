@@ -18,6 +18,34 @@ bool KDLSolver::initialize(const std::shared_ptr<rclcpp::Node> & node, const std
         return false;
     }
 
+    // Read identifiers from parameters (no hard-coded link names)
+    std::string arm_id_param;
+    if (!n->has_parameter("arm_id")) {
+        n->declare_parameter<std::string>("arm_id", "");
+    }
+    n->get_parameter("arm_id", arm_id_param);
+
+    // Prefer parameter; fallback to provided argument if param missing
+    arm_id_ = arm_id_param.empty() ? arm_id : arm_id_param;
+
+    if (!n->has_parameter("base_link")) {
+        n->declare_parameter<std::string>("base_link", "");
+    }
+    if (!n->has_parameter("ee_link")) {
+        n->declare_parameter<std::string>("ee_link", "");
+    }
+    std::string base_link_param;
+    std::string ee_link_param;
+    n->get_parameter("base_link", base_link_param);
+    n->get_parameter("ee_link", ee_link_param);
+    if (base_link_param.empty() || ee_link_param.empty()) {
+        RCLCPP_ERROR(logger, "Missing required parameters: base_link='%s' ee_link='%s'",
+                     base_link_param.c_str(), ee_link_param.c_str());
+        return false;
+    }
+    base_link_ = base_link_param;
+    ee_link_ = ee_link_param;
+
     // Retrieve robot_description from this node's parameters
     if (!n->has_parameter("robot_description")) {
         n->declare_parameter<std::string>("robot_description", "");
@@ -34,15 +62,7 @@ bool KDLSolver::initialize(const std::shared_ptr<rclcpp::Node> & node, const std
         return false;
     }
 
-    // Construct link names based on arm_id and store as member variables
-    arm_id_ = arm_id;
-    base_link_ = arm_id_ + "_link0";
-    std::string link8 = arm_id_ + "_link8";
-    ee_link_ = arm_id_ + "_EE";
-
-    // Add fixed EE offset segment (matches ROS1 behavior)
-    KDL::Frame newSegment(KDL::Vector(0, 0, 0.1034));
-    kdlTree.addSegment(KDL::Segment(ee_link_, KDL::Joint(KDL::Joint::None), newSegment, KDL::RigidBodyInertia::Zero()), link8);
+    // Links are taken directly from parameters; do not add synthetic EE segments
 
     // Count control points in the tree
     controlPointCount = 0;
@@ -83,8 +103,20 @@ Eigen::MatrixXd KDLSolver::computeJacobian(std::string linkName, Eigen::VectorXd
     // Read the element in the KDL chain array that needs to be indexed
 
     KDL::Chain kdlChain;
-    kdlTree.getChain(base_link_, linkName, kdlChain);
-
+    bool success = kdlTree.getChain(base_link_, linkName, kdlChain);
+    if (!success) {
+        RCLCPP_ERROR(rclcpp::get_logger("KDLSolver"),
+                     "kdlTree.getChain failed. Verify that base_link ('%s') and tip ('%s') exist in robot_description",
+                     base_link_.c_str(), linkName.c_str());
+        // Emit a short list of known segment names to help debugging
+        int printed = 0;
+        for (const auto & seg : kdlTree.getSegments()) {
+            if (printed >= 20) break; // avoid spamming
+            RCLCPP_INFO(rclcpp::get_logger("KDLSolver"), "KDL segment: %s", seg.first.c_str());
+            printed++;
+        }
+    }
+    
     KDL::JntArray KDLJointArray(7);
     KDLJointArray.data = q;
     KDLJointArray.resize(kdlChain.getNrOfJoints());

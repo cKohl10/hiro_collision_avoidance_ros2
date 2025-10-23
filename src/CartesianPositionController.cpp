@@ -158,6 +158,13 @@ void CartesianPositionController::ExternalCartesianWrenchRawCallback(const std_m
 
 void CartesianPositionController::JointStateCallback(const sensor_msgs::msg::JointState::SharedPtr msg){
     if (this->isSim) {
+        // indices 2..8 will be accessed; require at least 9 elements
+        if (msg->position.size() < 9 || msg->velocity.size() < 9) {
+            RCLCPP_WARN_THROTTLE(n->get_logger(), *n->get_clock(), 2000,
+                                 "JointState too small for sim indexing: pos=%zu vel=%zu",
+                                 msg->position.size(), msg->velocity.size());
+            return;
+        }
         q << msg->position[2], msg->position[3], msg->position[4],
              msg->position[5], msg->position[6], msg->position[7],
              msg->position[8];
@@ -167,6 +174,13 @@ void CartesianPositionController::JointStateCallback(const sensor_msgs::msg::Joi
              msg->velocity[8];
 
     } else {
+        // indices 0..6 will be accessed; require at least 7 elements
+        if (msg->position.size() < 7 || msg->velocity.size() < 7) {
+            RCLCPP_WARN_THROTTLE(n->get_logger(), *n->get_clock(), 2000,
+                                 "JointState too small for real indexing: pos=%zu vel=%zu",
+                                 msg->position.size(), msg->velocity.size());
+            return;
+        }
         q << msg->position[2-2], msg->position[3-2], msg->position[4-2],
              msg->position[5-2], msg->position[6-2], msg->position[7-2],
              msg->position[8-2];
@@ -184,7 +198,7 @@ void CartesianPositionController::readEndEffectorPosition(){
     while (rclcpp::ok()){
         try{
             // get transform betwen world frame and end effector frame
-            auto transform = tf_buffer->lookupTransform("map", ee_link_name_, tf2::TimePointZero);
+            auto transform = tf_buffer->lookupTransform(base_link_name_, ee_link_name_, tf2::TimePointZero);
             endEffectorPosition << transform.transform.translation.x,
                                          transform.transform.translation.y,
                                          transform.transform.translation.z;
@@ -192,6 +206,7 @@ void CartesianPositionController::readEndEffectorPosition(){
         }
         catch (tf2::TransformException &ex){
             rclcpp::sleep_for(std::chrono::milliseconds(100));
+            RCLCPP_ERROR(n->get_logger(), "Failed to lookup transform between world and end effector frame: %s", ex.what());
         }
     }
 
@@ -341,11 +356,40 @@ CartesianPositionController::CartesianPositionController(
   this->isSim = isSim;
   RCLCPP_INFO(n->get_logger(), "JointVelocityController initializing");
   this->jointVelocityController = JointVelocityController(isSim);
-  this->jointVelocityController.initialize(n, "fr3");
+
+  // Read identifiers from parameters first (no hard-coded defaults)
+  std::string arm_id_param;
+  std::string ee_link_param;
+  std::string base_link_param;
+  if (!n->has_parameter("arm_id")) {
+    n->declare_parameter<std::string>("arm_id", "");
+  }
+  if (!n->has_parameter("ee_link")) {
+    n->declare_parameter<std::string>("ee_link", "");
+  }
+  if (!n->has_parameter("base_link")) {
+    n->declare_parameter<std::string>("base_link", "");
+  }
+  n->get_parameter("arm_id", arm_id_param);
+  n->get_parameter("ee_link", ee_link_param);
+  n->get_parameter("base_link", base_link_param);
+  if (arm_id_param.empty() || ee_link_param.empty() || base_link_param.empty()) {
+    RCLCPP_ERROR(n->get_logger(), "Missing required parameters: arm_id='%s' ee_link='%s' base_link='%s'",
+                 arm_id_param.c_str(), ee_link_param.c_str(), base_link_param.c_str());
+  }
+
+  RCLCPP_INFO(n->get_logger(), "EE link: %s", ee_link_param.c_str());
+  RCLCPP_INFO(n->get_logger(), "Base link: %s", base_link_param.c_str());
+  RCLCPP_INFO(n->get_logger(), "Arm ID: %s", arm_id_param.c_str());
+  ee_link_name_ = ee_link_param;
+  base_link_name_ = base_link_param;
+
+  // Initialize controllers/solvers with provided arm_id
+  this->jointVelocityController.initialize(n, arm_id_param);
   RCLCPP_INFO(n->get_logger(), "JointVelocityController initialized");
 
   // Initialize KDL solver from URDF (robot_description)
-  if (!kdlSolver.initialize(n, "fr3")) {
+  if (!kdlSolver.initialize(n, arm_id_param)) {
     RCLCPP_ERROR(n->get_logger(), "Failed to initialize KDLSolver from robot_description");
   }
 
@@ -353,9 +397,16 @@ CartesianPositionController::CartesianPositionController(
   tf_buffer = std::make_shared<tf2_ros::Buffer>(n->get_clock());
   tf_listener = std::make_shared<tf2_ros::TransformListener>(*tf_buffer);
 
-  setJointLimits(node_handle);  // Initialize KDL first
+  // Parameters already read above; expose to HIROAvoidance via declared params (without hard-coded defaults)
+  if (!n->has_parameter("ee_link")) {
+    n->declare_parameter<std::string>("ee_link", ee_link_name_);
+  }
+  if (!n->has_parameter("base_link")) {
+    n->declare_parameter<std::string>("base_link", base_link_name_);
+  }
+
+  setJointLimits(node_handle);  // Initialize limits and construct HIROAvoidance (which reads params)
   getControlPoints();           // Then use it to get control points
-  ee_link_name_ = kdlSolver.getEELink();  // Store EE link name for TF lookups
   createRosPubsSubs();
 
   // TODO: Set previous velocities to zero
@@ -408,6 +459,7 @@ void CartesianPositionController::moveToPosition(Eigen::Vector3d desiredPosition
     // get error in position
     float current_vel = 0.0;
     positionError = desiredPosition - endEffectorPosition;
+    RCLCPP_INFO(n->get_logger(), "Position error: %f, %f, %f", positionError(0), positionError(1), positionError(2));
     // loop until position error is sufficiently small
     while (positionError.norm() > positionErrorThreshold && rclcpp::ok()) {
         // get EE pos
@@ -420,6 +472,7 @@ void CartesianPositionController::moveToPosition(Eigen::Vector3d desiredPosition
         }
         joint_positions = kdlSolver.forwardKinematicsJoints(q);
         positionError = desiredPosition - endEffectorPosition;
+        RCLCPP_INFO(n->get_logger(), "Position error: %f, %f, %f", positionError(0), positionError(1), positionError(2));
         if (positionError.norm() < 0.25)
         {
             desiredEEVelocity = positionError.norm() * positionError.normalized();
@@ -550,7 +603,6 @@ void CartesianPositionController::moveToPositionOneStep(const Eigen::Vector3d de
     readEndEffectorPosition();
     Eigen::Vector3d EEVelocityVector = getEEVelocity();
     positionError = desiredPositionVector - endEffectorPosition;
-
     desiredEEVelocity = positionError;
     double norm = desiredEEVelocity.norm();
     double velNorm = EEVelocityVector.norm();
@@ -571,10 +623,13 @@ void CartesianPositionController::moveToPositionOneStep(const Eigen::Vector3d de
         desiredEEVelocity = current_vel_one_step * desiredEEVelocity.normalized();
     }
 
+
     rclcpp::spin_some(n);
+
 
     const std::lock_guard<std::mutex> lock(mutex);
     joint_positions = kdlSolver.forwardKinematicsJoints(q);
+    // RCLCPP_INFO(n->get_logger(), "Forward kinematics joint positions: %f, %f, %f, %f, %f, %f, %f", joint_positions(0), joint_positions(1), joint_positions(2), joint_positions(3), joint_positions(4), joint_positions(5), joint_positions(6));
     switch (avoidanceMode)
     {
         case noAvoidance:
@@ -582,11 +637,11 @@ void CartesianPositionController::moveToPositionOneStep(const Eigen::Vector3d de
             break;
         case HIRO:
         {
-                qDot = hiroAvoidance.computeJointVelocities(q, desiredEEVelocity,
-                                                        obstaclePositionVectors,
-                                                        closestPointsOnRobot, rate, 
-                                                        endEffectorPosition, desiredPositionVector, 
-                                                        joint_positions);
+            qDot = hiroAvoidance.computeJointVelocities(q, desiredEEVelocity,
+                                                    obstaclePositionVectors,
+                                                    closestPointsOnRobot, rate, 
+                                                    endEffectorPosition, desiredPositionVector, 
+                                                    joint_positions);
             // EEVelocity = getEEVelocity();
             // qDot = hiroAvoidance.computeJointVelocitiesWithExtCartForce(q, desiredEEVelocity,
             //                                             externalCartesianForce,

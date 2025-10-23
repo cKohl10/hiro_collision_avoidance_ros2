@@ -70,6 +70,8 @@ class CartesianPositionController {
     KDLSolver kdlSolver;
     std::mutex mutex;
     std::string ee_link_name_;
+    std::string base_link_name_;
+    std::string _link8;
 
 
     Eigen::Vector3d EEVelocity;

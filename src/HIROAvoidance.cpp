@@ -30,6 +30,23 @@ HIROAvoidance::HIROAvoidance(JointLimits jointLimits, std::shared_ptr<rclcpp::No
     forceBasedRepulsiveVelocity = Eigen::Vector3d(0.0, 0.0, 0.0);
     this->obstacle_life = 0;
     this->hit_life = 0;
+
+    // Get parameters (they should already be declared by CartesianPositionController)
+    ee_link_name = node_handle->get_parameter("ee_link").as_string();
+    base_link_name = node_handle->get_parameter("base_link").as_string();
+
+    // Initialize our internal KDL solver using the same parameters so base/tip are valid
+    std::string arm_id_param;
+    if (!node_handle->has_parameter("arm_id")) {
+        node_handle->declare_parameter<std::string>("arm_id", "");
+    }
+    node_handle->get_parameter("arm_id", arm_id_param);
+    if (arm_id_param.empty()) {
+        RCLCPP_WARN(rclcpp::get_logger("HIROAvoidance"), "Parameter 'arm_id' is empty; KDLSolver initialization may fail");
+    }
+    if (!kdlSolver.initialize(node_handle, arm_id_param)) {
+        RCLCPP_ERROR(rclcpp::get_logger("HIROAvoidance"), "Failed to initialize KDLSolver inside HIROAvoidance");
+    }
 }
 
 void HIROAvoidance::setCartesianComplianceGains(Eigen::VectorXd gains) {
@@ -105,8 +122,7 @@ void HIROAvoidance::getVelocityLimits(Eigen::VectorXd& lowerBound, Eigen::Vector
 
 Eigen::MatrixXd HIROAvoidance::getHMatrix(Eigen::VectorXd& q, Eigen::Vector3d& xDot, bool drop_goal)
 {
-
-    if (!drop_goal){
+        if (!drop_goal){
         double xDot_norm = xDot.norm();
         double secondaryTaskGain = 0.01;
         double time_delta = 1.0/10.0;
@@ -121,15 +137,16 @@ Eigen::MatrixXd HIROAvoidance::getHMatrix(Eigen::VectorXd& q, Eigen::Vector3d& x
                 0, 0, 0, 0, 0, 0, 1/(2*m_squared(6));
         Eigen::MatrixXd middle_joint_H_term = (secondaryTaskGain * i_div * time_delta * time_delta);
 
-        Eigen::MatrixXd J = kdlSolver.computeJacobian(kdlSolver.getEELink(), q).block(0,0,3,7);
+        Eigen::MatrixXd J = kdlSolver.computeJacobian(ee_link_name, q).block(0,0,3,7);
         Eigen::MatrixXd Jpinv = J.completeOrthogonalDecomposition().pseudoInverse();
         Eigen::MatrixXd H = J.transpose() * J + computeDampingFactor(std::sqrt((J*J.transpose()).determinant())) * Eigen::MatrixXd::Identity(7,7) + middle_joint_H_term;
+
         // example of how to use the v2 damping factor function
         // Eigen::MatrixXd H = J.transpose() * J + computeDampingFactorV2(1.0, 1.0, J) * Eigen::MatrixXd::Identity(7,7) + middle_joint_H_term;
 
         return H;
     } else{
-        Eigen::MatrixXd J = kdlSolver.computeJacobian(kdlSolver.getEELink(), q).block(0,0,3,7);
+        Eigen::MatrixXd J = kdlSolver.computeJacobian(ee_link_name, q).block(0,0,3,7);
 
         Eigen::MatrixXd Jpinv = J.completeOrthogonalDecomposition().pseudoInverse();
         Eigen::MatrixXd qGroundTruth = Jpinv * xDot ;
@@ -151,13 +168,13 @@ Eigen::VectorXd HIROAvoidance::getfVector(Eigen::VectorXd& q, Eigen::Vector3d& x
         Eigen::MatrixXd middle_joint_f_term_1 = (secondaryTaskGain * q.cwiseQuotient(m_squared).transpose() * time_delta);
         Eigen::MatrixXd middle_joint_f_term_2 = -(secondaryTaskGain * _jointLimits.jointMiddleValues.cwiseQuotient(m_squared).transpose() * time_delta);
 
-        Eigen::MatrixXd J = kdlSolver.computeJacobian(kdlSolver.getEELink(), q).block(0,0,3,7);
+        Eigen::MatrixXd J = kdlSolver.computeJacobian(ee_link_name, q).block(0,0,3,7);
         Eigen::MatrixXd Jpinv = J.completeOrthogonalDecomposition().pseudoInverse();
         Eigen::VectorXd f = - xDot.transpose() * J + middle_joint_f_term_1 + middle_joint_f_term_2;
         return f;
 
     } else{
-        Eigen::MatrixXd J = kdlSolver.computeJacobian(kdlSolver.getEELink(), q).block(0,0,3,7);
+        Eigen::MatrixXd J = kdlSolver.computeJacobian(ee_link_name, q).block(0,0,3,7);
 
         Eigen::MatrixXd Jpinv = J.completeOrthogonalDecomposition().pseudoInverse();
         Eigen::VectorXd f = - xDot.transpose() * J;

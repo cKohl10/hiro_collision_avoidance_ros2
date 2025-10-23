@@ -33,6 +33,9 @@ private:
     double force_hit;
     Eigen::Vector3d ext_vel;
 
+    std::string ee_link_name;
+    std::string base_link_name;
+
 
     JointLimits _jointLimits;
 
