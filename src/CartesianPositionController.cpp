@@ -3,6 +3,45 @@
 #include <chrono>
 #include <functional>
 
+void CartesianPositionController::publishGoal(Eigen::Vector3d goal){
+    sensor_msgs::msg::PointCloud2 cloud;
+    cloud.header.stamp = n->now();
+    cloud.header.frame_id = base_link_name_;
+
+    // Define fields x, y, z
+    cloud.height = 1;
+    cloud.width = 1; // single point
+    cloud.is_bigendian = false;
+    cloud.is_dense = true;
+    cloud.point_step = 12; // 3 floats (x,y,z)
+    cloud.row_step = cloud.point_step * cloud.width;
+
+    sensor_msgs::PointCloud2Modifier modifier(cloud);
+    modifier.setPointCloud2FieldsByString(1, "xyz");
+    modifier.resize(1);
+
+    sensor_msgs::PointCloud2Iterator<float> iter_x(cloud, "x");
+    sensor_msgs::PointCloud2Iterator<float> iter_y(cloud, "y");
+    sensor_msgs::PointCloud2Iterator<float> iter_z(cloud, "z");
+    *iter_x = static_cast<float>(goal(0));
+    *iter_y = static_cast<float>(goal(1));
+    *iter_z = static_cast<float>(goal(2));
+
+    goal_pub->publish(cloud);
+    // RCLCPP_INFO(n->get_logger(), "Goal pointcloud published: x=%f, y=%f, z=%f", goal(0), goal(1), goal(2));
+}
+
+// Arbitrary vector available for debugging
+void CartesianPositionController::publishLoggingArray(Eigen::VectorXd vector)
+{
+    std_msgs::msg::Float64MultiArray msg;
+    msg.data.resize(vector.size());
+    for (int i = 0; i < vector.size(); i++) {
+        msg.data[i] = vector(i);
+    }
+    logging_array_pub->publish(msg);
+}
+
 /*
     set the joint limits for the robot,
     position, velocity, and acceleration limits
@@ -10,10 +49,11 @@
 void CartesianPositionController::setJointLimits(std::shared_ptr<rclcpp::Node> node_handle){
     Eigen::VectorXd jointLimitsMin{7}, jointLimitsMax{7}, jointMiddleValues{7}, jointRanges{7}, jointVelocityMax{7}, jointAccelerationMax{7};
 
-    jointLimitsMin << -2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973;
-    jointLimitsMax << +2.8973, +1.7628, +2.8973, -0.0698, +2.8973, +3.7525, +2.8973;
-    jointVelocityMax << 2.1750, 2.1750, 2.1750 , 2.1750, 2.6100 , 2.6100 , 2.6100;
-    jointAccelerationMax << 15, 7.5, 10, 12.5, 15, 20, 20;
+    // Updated for the fr3 robot
+    jointLimitsMin << -2.9007, -1.8361, -2.9007, -3.0770, -2.8763, 0.4398, -3.0508;
+    jointLimitsMax << +2.9007, +1.8361, +2.9007, -0.1169, +2.8763, +4.6216, +3.0508;
+    jointVelocityMax << 2.62, 2.62, 2.62, 2.62, 5.26, 4.18, 5.26;
+    jointAccelerationMax << 10, 10, 10, 10, 10, 10, 10;
 
 
     //TODO: remove hard limits on joint vel and acc
@@ -54,9 +94,9 @@ void CartesianPositionController::createRosPubsSubs(){
                                                       std::bind(&CartesianPositionController::ObstaclePointsCallback, this, std::placeholders::_1));
     
     // TODO: Naming convention for fr3
-    subscriberExternalCartesianWrench = n->create_subscription<std_msgs::msg::Float64MultiArray>("/panda_joint_velocity_contact_controller/external_signal", 1,
+    subscriberExternalCartesianWrench = n->create_subscription<std_msgs::msg::Float64MultiArray>("/fr3_joint_velocity_contact_controller/external_signal", 1,
                                                       std::bind(&CartesianPositionController::ExternalCartesianWrenchCallback, this, std::placeholders::_1));
-    subscriberExternalCartesianWrenchRaw = n->create_subscription<std_msgs::msg::Float64MultiArray>("/panda_joint_velocity_contact_controller/external_wrench", 1,
+    subscriberExternalCartesianWrenchRaw = n->create_subscription<std_msgs::msg::Float64MultiArray>("/fr3_joint_velocity_contact_controller/external_wrench", 1,
                                                       std::bind(&CartesianPositionController::ExternalCartesianWrenchRawCallback, this, std::placeholders::_1));
     subscriberControllerSwitch = n->create_subscription<std_msgs::msg::String>("/controller_switch", 1,
                                                        std::bind(&CartesianPositionController::ControllerSwitchCallback, this, std::placeholders::_1));
@@ -67,6 +107,8 @@ void CartesianPositionController::createRosPubsSubs(){
     // Throught he LoggerPublisher
     // arrow_publisher =  n->create_publisher<std_msgs::msg::Float64>("/contact_threshold",1);
     // test_pub =  n->create_publisher<std_msgs::msg::Float64>("/current_vel_des",1);
+    goal_pub = n->create_publisher<sensor_msgs::msg::PointCloud2>("/goal_pointcloud",1);
+    logging_array_pub = n->create_publisher<std_msgs::msg::Float64MultiArray>("/logging_array",1);
 
 }
 
@@ -459,7 +501,6 @@ void CartesianPositionController::moveToPosition(Eigen::Vector3d desiredPosition
     // get error in position
     float current_vel = 0.0;
     positionError = desiredPosition - endEffectorPosition;
-    RCLCPP_INFO(n->get_logger(), "Position error: %f, %f, %f", positionError(0), positionError(1), positionError(2));
     // loop until position error is sufficiently small
     while (positionError.norm() > positionErrorThreshold && rclcpp::ok()) {
         // get EE pos
@@ -471,18 +512,18 @@ void CartesianPositionController::moveToPosition(Eigen::Vector3d desiredPosition
             current_vel = 0.0;
         }
         joint_positions = kdlSolver.forwardKinematicsJoints(q);
+        // RCLCPP_INFO(n->get_logger(), "q: %f, %f, %f, %f, %f, %f, %f", (q(0)), q(1), q(2), q(3), q(4), q(5), q(6));
         positionError = desiredPosition - endEffectorPosition;
-        // RCLCPP_INFO(n->get_logger(), "Current position: %f, %f, %f", endEffectorPosition(0), endEffectorPosition(1), endEffectorPosition(2));
-        // RCLCPP_INFO(n->get_logger(), "Desired position: %f, %f, %f", desiredPosition(0), desiredPosition(1), desiredPosition(2));
-        // RCLCPP_INFO(n->get_logger(), "Position error: %f, %f, %f", positionError(0), positionError(1), positionError(2));
-        // RCLCPP_INFO(n->get_logger(), "Joint positions: %f, %f, %f, %f, %f, %f, %f", joint_positions(0), joint_positions(1), joint_positions(2), joint_positions(3), joint_positions(4), joint_positions(5), joint_positions(6));
+        publishGoal(desiredPosition);
+        publishLoggingArray(positionError);
+
         if (positionError.norm() < 0.25)
         {
             desiredEEVelocity = positionError.norm() * positionError.normalized();
 
         } else {
             // restrict velocity to have a norm of 0.25
-            current_vel = std::min(0.35, current_vel + 0.001);
+            current_vel = std::min(0.25, current_vel + 0.001);
             desiredEEVelocity = current_vel * positionError.normalized();
         }
 
@@ -501,7 +542,10 @@ void CartesianPositionController::moveToPosition(Eigen::Vector3d desiredPosition
                 // qDot = hiroAvoidance.computeJointVelocities(q, desiredEEVelocity,
                 //                                             obstaclePositionVectors,
                 //                                             closestPointsOnRobot, rate, endEffectorPosition, desiredPosition, arrow_publisher);
-                RCLCPP_INFO(n->get_logger(), "Desired EE velocity: %f, %f, %f", desiredEEVelocity(0), desiredEEVelocity(1), desiredEEVelocity(2));
+                // RCLCPP_INFO(n->get_logger(), "Desired EE velocity: %f, %f, %f", desiredEEVelocity(0), desiredEEVelocity(1), desiredEEVelocity(2));
+                // RCLCPP_INFO(n->get_logger(), "End effector position: %f, %f, %f", endEffectorPosition(0), endEffectorPosition(1), endEffectorPosition(2));
+                // RCLCPP_INFO(n->get_logger(), "Desired position: %f, %f, %f", desiredPosition(0), desiredPosition(1), desiredPosition(2));
+                
                 EEVelocity = getEEVelocity();
                 qDot = hiroAvoidance.computeJointVelocitiesWithExtCartForce(q, desiredEEVelocity,
                                                         externalCartesianForce,
@@ -511,8 +555,9 @@ void CartesianPositionController::moveToPosition(Eigen::Vector3d desiredPosition
                                                         inContact);
                 // invert the indices of the qDot vector
                 // qDot = qDot.reverse();
-                RCLCPP_INFO(n->get_logger(), "Joint velocities: %f, %f, %f, %f, %f, %f, %f", qDot(0), qDot(1), qDot(2), qDot(3), qDot(4), qDot(5), qDot(6));
-                RCLCPP_INFO(n->get_logger(), "Joint positions: %f, %f, %f, %f, %f, %f, %f", q(0), q(1), q(2), q(3), q(4), q(5), q(6));
+                // RCLCPP_INFO(n->get_logger(), "Joint velocities: %f, %f, %f, %f, %f, %f, %f", qDot(0), qDot(1), qDot(2), qDot(3), qDot(4), qDot(5), qDot(6));
+                // RCLCPP_INFO(n->get_logger(), "Joint positions: %f, %f, %f, %f, %f, %f, %f", q(0), q(1), q(2), q(3), q(4), q(5), q(6));
+        
                 jointVelocityController.sendVelocities(qDot);
                 break;
             }
@@ -610,6 +655,8 @@ void CartesianPositionController::moveToPositionOneStep(const Eigen::Vector3d de
 {
     readEndEffectorPosition();
     Eigen::Vector3d EEVelocityVector = getEEVelocity();
+    // RCLCPP_INFO(n->get_logger(), "Moving to position: %f, %f, %f", desiredPositionVector(0), desiredPositionVector(1), desiredPositionVector(2));
+    publishGoal(desiredPositionVector);
     positionError = desiredPositionVector - endEffectorPosition;
     desiredEEVelocity = positionError;
     double norm = desiredEEVelocity.norm();
@@ -748,8 +795,6 @@ void CartesianPositionController::commandVelocityOneStep(const Eigen::Vector3d d
     prevControlOutputs.push_back(prevQDot);
     rate.sleep();
 }
-
-
 
 /*
     set joint velocities to 0.

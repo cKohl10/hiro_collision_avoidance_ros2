@@ -100,7 +100,8 @@ bool KDLSolver::initialize(const std::shared_ptr<rclcpp::Node> & node, const std
         return false;
     }
 
-    // Links are taken directly from parameters; do not add synthetic EE segments
+    KDL::Frame newSegment(KDL::Vector(0, 0, 0.1034));
+    kdlTree.addSegment(KDL::Segment(ee_link_, KDL::Joint(KDL::Joint::None), newSegment, KDL::RigidBodyInertia::Zero()), arm_id_ + "_link8");
 
     // Count control points in the tree
     controlPointCount = 0;

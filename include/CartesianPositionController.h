@@ -55,6 +55,8 @@ class CartesianPositionController {
     rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr subscriberExternalCartesianWrench;
     rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr subscriberExternalCartesianWrenchRaw;
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr test_pub;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr goal_pub;
+    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr logging_array_pub;
 
     bool robotInContact = false;
 
@@ -123,5 +125,8 @@ class CartesianPositionController {
     Eigen::Vector3d externalCartesianForce{3};
     Eigen::Vector3d externalCartesianWrench{3};
 
+    // Debugging
+    void publishGoal(Eigen::Vector3d goal);
+    void publishLoggingArray(Eigen::VectorXd vector);
 
 };

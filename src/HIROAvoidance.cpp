@@ -554,6 +554,7 @@ Eigen::VectorXd HIROAvoidance::computeJointVelocitiesWithExtCartForce(Eigen::Vec
 
 
     // construct h matrix and f vector for qp formulation
+    RCLCPP_INFO(rclcpp::get_logger("HIROAvoidance"), "Constructing H matrix and f vector");
     Eigen::MatrixXd H = getHMatrix(q, xDot, drop_goal);
     Eigen::VectorXd f = getfVector(q, xDot, drop_goal);
 
