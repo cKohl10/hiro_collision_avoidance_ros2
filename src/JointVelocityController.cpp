@@ -113,18 +113,9 @@ void JointVelocityController::sendVelocities(const Eigen::VectorXd velocities){
     }
 
     if (this->isSim){
-        static uint32_t log_counter = 0;
-        if ((log_counter++ % 200) == 0) {
-            RCLCPP_INFO(n->get_logger(), "Sending sim velocities");
-        }
-        _sendSimVelocities(velocities);
-        // _sendRealVelocities(velocities);
+        _sendSimVelocities(velocities); // No longer used in ROS2
 
     } else {
-        static uint32_t log_counter = 0;
-        if ((log_counter++ % 200) == 0) {
-            RCLCPP_INFO(n->get_logger(), "Sending real velocities");
-        }
         _sendRealVelocities(velocities);
     }
 }

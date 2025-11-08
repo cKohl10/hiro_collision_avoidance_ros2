@@ -510,20 +510,20 @@ void CartesianPositionController::moveToPosition(Eigen::Vector3d desiredPosition
         if (inContact) {
             // reset current vel
             current_vel = 0.0;
+            RCLCPP_INFO(n->get_logger(), "In contact, resetting current velocity to 0.0");
         }
         joint_positions = kdlSolver.forwardKinematicsJoints(q);
-        // RCLCPP_INFO(n->get_logger(), "q: %f, %f, %f, %f, %f, %f, %f", (q(0)), q(1), q(2), q(3), q(4), q(5), q(6));
         positionError = desiredPosition - endEffectorPosition;
         publishGoal(desiredPosition);
         publishLoggingArray(positionError);
 
-        if (positionError.norm() < 0.25)
+        if (positionError.norm() < 0.2)
         {
             desiredEEVelocity = positionError.norm() * positionError.normalized();
 
         } else {
-            // restrict velocity to have a norm of 0.25
-            current_vel = std::min(0.25, current_vel + 0.001);
+            // restrict velocity
+            current_vel = std::min(0.2, current_vel + 0.001);
             desiredEEVelocity = current_vel * positionError.normalized();
         }
 
@@ -538,25 +538,21 @@ void CartesianPositionController::moveToPosition(Eigen::Vector3d desiredPosition
                 jointVelocityController.sendVelocities(qDot);
                 break;
             case HIRO:
-            {
-                // qDot = hiroAvoidance.computeJointVelocities(q, desiredEEVelocity,
-                //                                             obstaclePositionVectors,
-                //                                             closestPointsOnRobot, rate, endEffectorPosition, desiredPosition, arrow_publisher);
-                // RCLCPP_INFO(n->get_logger(), "Desired EE velocity: %f, %f, %f", desiredEEVelocity(0), desiredEEVelocity(1), desiredEEVelocity(2));
-                // RCLCPP_INFO(n->get_logger(), "End effector position: %f, %f, %f", endEffectorPosition(0), endEffectorPosition(1), endEffectorPosition(2));
-                // RCLCPP_INFO(n->get_logger(), "Desired position: %f, %f, %f", desiredPosition(0), desiredPosition(1), desiredPosition(2));
-                
-                EEVelocity = getEEVelocity();
-                qDot = hiroAvoidance.computeJointVelocitiesWithExtCartForce(q, desiredEEVelocity,
-                                                        externalCartesianForce,
-                                                        externalCartesianWrench,
-                                                        obstaclePositionVectors,
-                                                        closestPointsOnRobot, rate, endEffectorPosition, desiredPosition, EEVelocity,
-                                                        inContact);
+            {                
+                // EEVelocity = getEEVelocity();
+                qDot = hiroAvoidance.computeJointVelocities(q, desiredEEVelocity,
+                    obstaclePositionVectors,
+                    closestPointsOnRobot, rate, 
+                    endEffectorPosition, desiredPosition, 
+                    joint_positions);
+                // qDot = hiroAvoidance.computeJointVelocitiesWithExtCartForce(q, desiredEEVelocity,
+                //                                         externalCartesianForce,
+                //                                         externalCartesianWrench,
+                //                                         obstaclePositionVectors,
+                //                                         closestPointsOnRobot, rate, endEffectorPosition, desiredPosition, EEVelocity,
+                //                                         inContact);
                 // invert the indices of the qDot vector
                 // qDot = qDot.reverse();
-                // RCLCPP_INFO(n->get_logger(), "Joint velocities: %f, %f, %f, %f, %f, %f, %f", qDot(0), qDot(1), qDot(2), qDot(3), qDot(4), qDot(5), qDot(6));
-                // RCLCPP_INFO(n->get_logger(), "Joint positions: %f, %f, %f, %f, %f, %f, %f", q(0), q(1), q(2), q(3), q(4), q(5), q(6));
         
                 jointVelocityController.sendVelocities(qDot);
                 break;
@@ -655,10 +651,10 @@ void CartesianPositionController::moveToPositionOneStep(const Eigen::Vector3d de
 {
     readEndEffectorPosition();
     Eigen::Vector3d EEVelocityVector = getEEVelocity();
-    // RCLCPP_INFO(n->get_logger(), "Moving to position: %f, %f, %f", desiredPositionVector(0), desiredPositionVector(1), desiredPositionVector(2));
     publishGoal(desiredPositionVector);
     positionError = desiredPositionVector - endEffectorPosition;
     desiredEEVelocity = positionError;
+    publishLoggingArray(positionError);
     double norm = desiredEEVelocity.norm();
     double velNorm = EEVelocityVector.norm();
 
@@ -667,16 +663,42 @@ void CartesianPositionController::moveToPositionOneStep(const Eigen::Vector3d de
         current_vel_one_step = 0.0;
     }
 
-    // Limit the robot's change in acceleration
-    // TODO: Caleb - I don't think this is the best way to do this
-    if(norm > 0.20 || !isEnd){
-        current_vel_one_step = std::min(0.20, current_vel_one_step + 0.001);
-        desiredEEVelocity = current_vel_one_step * desiredEEVelocity.normalized();
+    // Limit the robot's change in acceleration. This is an upper bound on the velocity.
+    double accel_limit = 0.0001;
+    // double accel_limit = 1.0;
+    double vel_upper_limit = 1.0;
+    double vel_lower_threshold = 0.1; // Set this to 0.0 to disable slowing down near the goal.
+    double transfer_velocity = 0.5; // Flat velocity when not near the goal.
+    double target_velocity = 0.0;
+    // if(norm > vel_upper_limit || !isEnd){
+    //     current_vel_one_step = std::min(vel_upper_limit, current_vel_one_step + accel_limit);
+    //     desiredEEVelocity = current_vel_one_step * desiredEEVelocity.normalized();
+    // } else if (norm < vel_lower_limit) 
+    // {
+    //     current_vel_one_step = std::min(norm, current_vel_one_step + accel_limit);
+    //     desiredEEVelocity = current_vel_one_step * desiredEEVelocity.normalized();
+    // } else {
+    //     current_vel_one_step = std::min(transfer_velocity, current_vel_one_step + accel_limit);
+    //     desiredEEVelocity = current_vel_one_step * desiredEEVelocity.normalized();
+    // }
+    if(norm > vel_upper_limit || !isEnd){
+        target_velocity = vel_upper_limit;
+    } else if (norm < vel_lower_threshold) 
+    {
+        target_velocity = norm;
     } else {
-
-        current_vel_one_step = std::min(norm, current_vel_one_step + 0.001);
-        desiredEEVelocity = current_vel_one_step * desiredEEVelocity.normalized();
+        target_velocity = transfer_velocity;
     }
+    double diff = target_velocity - current_vel_one_step;
+
+    if(diff >= accel_limit){
+        current_vel_one_step = current_vel_one_step + accel_limit;
+    } else if(diff <= -accel_limit){
+        current_vel_one_step = current_vel_one_step - accel_limit;
+    } else {
+        current_vel_one_step = target_velocity;
+    }
+    desiredEEVelocity = current_vel_one_step * desiredEEVelocity.normalized();
 
 
     rclcpp::spin_some(n);
@@ -684,7 +706,6 @@ void CartesianPositionController::moveToPositionOneStep(const Eigen::Vector3d de
 
     const std::lock_guard<std::mutex> lock(mutex);
     joint_positions = kdlSolver.forwardKinematicsJoints(q);
-    // RCLCPP_INFO(n->get_logger(), "Forward kinematics joint positions: %f, %f, %f, %f, %f, %f, %f", joint_positions(0), joint_positions(1), joint_positions(2), joint_positions(3), joint_positions(4), joint_positions(5), joint_positions(6));
     switch (avoidanceMode)
     {
         case noAvoidance:

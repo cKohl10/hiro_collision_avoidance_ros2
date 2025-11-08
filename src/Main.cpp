@@ -25,7 +25,6 @@ void on_shutdown(int sig) {
 }
 
 Eigen::Vector3d goalPosG = Eigen::Vector3d(0.5, 0, 0.35);
-Eigen::Vector4d xboxVals = Eigen::Vector4d(0, 0, 0, 0);
 
 
 void setAvoidanceMode(CartesianPositionController &controller, std::shared_ptr<rclcpp::Node> node){
@@ -307,143 +306,43 @@ void holdStaticPose(CartesianPositionController &controller){
     controller.setVelocitiesToZero();
 }
 
+void moveInBox(CartesianPositionController &controller){
 
-/*
-    also moves the robot in a circle -- but eliminates the controller error.
-*/
-void moveInCircleV2(CartesianPositionController &controller, double timeToComplete){
-    double radius = 0.25;
-    Eigen::Vector3d goal, endEffectorPosition, positionError;
-    Eigen::Vector3d start_pos = Eigen::Vector3d(0.5, radius, 0.35);
-    controller.moveToPosition(start_pos);
+    Eigen::Vector3d trajectory, endEffectorPosition, positionError;
+    Eigen::Vector3d goal = Eigen::Vector3d(0.4, -0.2, 0.35);
+    std::vector<Eigen::Vector3d, Eigen::aligned_allocator<Eigen::Vector3d>> points;
+
+    // Add the points of the box
+    points.push_back(Eigen::Vector3d(0.5, -0.2, 0.35));
+    points.push_back(Eigen::Vector3d(0.5, 0.2, 0.35));
+    points.push_back(Eigen::Vector3d(0.5, 0.2, 0.45));
+    points.push_back(Eigen::Vector3d(0.5, -0.2, 0.45));
+
     endEffectorPosition = controller.getEEPosition();
 
-    // oscillates at 17
-    // float p_gain = 0.45;
-    // float i_gain = 0.18;
-    // float d_gain = 0.0;
-    // queue that [can] be used
-    std::deque<Eigen::Vector3d> basic_queue;
-    // good version
-    float p_gain = 3.00;
-    float i_gain = 0.00;
-    float d_gain = 0.0;
-    // this gain's error is higher -- but may be more unstable in real life~
-    // float p_gain = 10;
-    // float i_gain = 100.0;
-    // float d_gain = 0.05;
-
-    Eigen::Vector3d prev_error;
-    Eigen::Vector3d cum_error = Eigen::Vector3d(0, 0, 0);
-    float max_vel = 0;
-
-    Eigen::Vector3d trajectory;
-    Eigen::Vector3d desiredEEVelocity;
-
-    double theta = 0;
-
-    // equation for a circle
-    float y1, z1;
-    double x = 0.5;
-    double y = radius * std::cos(theta);
-    // double z = 0.5 + radius * std::sin(theta);
-    Eigen::Vector3d center = Eigen::Vector3d(0.5, 0, start_pos(1));
-    double z = start_pos(2) + radius * std::sin(theta);
-    bool circle_complete = false;
+    float transition_distance = 0.05;
+    int current_point = 0;
+    float error;
 
     rclcpp::Time start_of_movement = g_node->now();
-    rclcpp::Time cur_time = start_of_movement;
 
-    rclcpp::Rate rate{100.0};
-    trajectory = Eigen::Vector3d(x, y, z);
-
-    // increment
-    double b = (M_PI * 2.0) / timeToComplete;
-    double inc = (M_PI * 2.0) / (timeToComplete * 100.0);
-    bool done = false;
-    float error;
-    rclcpp::Duration cur_time_duration = rclcpp::Duration::from_seconds(0);
-    double delta_time = 0.01;
-    double total_error = 0.0;
-    double prev = 0;
-    float prev_norm = 0;
-    Eigen::Vector3d controller_output;
-    Eigen::Vector3d prev_output;
-    Eigen::Vector3d acc;
-    Eigen::Vector3d prev_trajectory;
-
-
-    endEffectorPosition = Eigen::Vector3d(0.5, radius, 0.35);
-    // a potentially useful incremental var
-    int i = 0;
-    float amt = 0;
-    while (!circle_complete)
+    while (true)
     {
         endEffectorPosition = controller.getEEPosition();
-        error = abs((trajectory - endEffectorPosition).norm());
-        total_error = total_error + error;
-        float t = (rclcpp::Time(start_of_movement).seconds() + amt);
-        y = radius * std::cos(b * t);
-        z = start_pos(2) + radius * std::sin(b * t);
-        prev_trajectory = trajectory;
-        trajectory = Eigen::Vector3d(x, y, z);
-        Eigen::Vector3d des_vel = (trajectory - prev_trajectory) / 0.01;
-        Eigen::Vector3d d_error = des_vel - controller.getEEVelocity();
-        endEffectorPosition = controller.getEEPosition();
+        error = abs((goal - endEffectorPosition).norm());
 
+        controller.publishGoal(goal);
+        controller.moveToPositionOneStep(goal);
 
-        // desired velocity
-        desiredEEVelocity = (trajectory - endEffectorPosition) / (0.01 * 5); // limit ee velocity
-        // proportional error
-        Eigen::Vector3d p_error = (trajectory - endEffectorPosition);
-        // integral error
-        cum_error += (p_error * 0.01);
-        Eigen::Vector3d i_error = (cum_error);
-        // derivative error
-        if (i == 0)
-        {
-            d_error = Eigen::Vector3d(0, 0, 0);
+        // if the error is less than the transition distance, move to the next point
+        if (error < transition_distance){
+            current_point = (current_point + 1) % points.size();
+            goal = points[current_point];
         }
-        controller_output = (p_gain * p_error) + (i_gain * i_error) + (des_vel * d_gain);
-        double norm = controller_output.norm();
-        double diff = norm - prev_norm;
-        double scale = std::max(diff, -0.001);
-        scale = std::min(scale, 0.001);
-        acc = (controller_output - prev_output) / 0.01;
-        for (int i = 0; i < 3; i++)
-        {
-            float total_sum = controller_output(i);
-            for (int j = 0; j < basic_queue.size(); j++)
-            {
-                total_sum += basic_queue[j](i);
-            }
-            float avg = total_sum / (basic_queue.size() + 1);
-            // if the below line is *uncommented", then the output
-            // will go through a moving avg filter
-            // controller_output(i) = avg;
-        }
-
-        controller.commandVelocityOneStep(controller_output, trajectory);
-        cur_time_duration = (g_node->now() - start_of_movement);
-        delta_time = cur_time_duration.seconds() - prev;
-        prev = cur_time_duration.seconds();
-        i++;
-        amt = amt + 0.01;
-        prev_error = p_error;
-        prev_output = controller_output;
-        prev_norm = norm;
-        if (basic_queue.size() + 1 > 4)
-        {
-            basic_queue.pop_front();
-
-        }
-        basic_queue.push_back(controller_output);
 
     }
-    // end task and set joint velocities to zero
     controller.setVelocitiesToZero();
 }
-
 
 
 
@@ -524,12 +423,12 @@ void moveRobot(CartesianPositionController &controller, std::shared_ptr<rclcpp::
     if (movement_mode == "line"){
         RCLCPP_INFO(node->get_logger(), "Move in line");
         moveInLine(controller, 10);
+    } else if (movement_mode == "box"){
+        RCLCPP_INFO(node->get_logger(), "Move in box");
+        moveInBox(controller);
     } else if (movement_mode == "circle"){
         RCLCPP_INFO(node->get_logger(), "Move in circle");
         moveInCircle(controller, 5);
-    } else if (movement_mode == "circlev2"){
-        RCLCPP_INFO(node->get_logger(), "Move in circle v2");
-        moveInCircleV2(controller, 10);
     } else if(movement_mode == "static"){
         RCLCPP_INFO(node->get_logger(), "static position");
         holdStaticPose(controller);
