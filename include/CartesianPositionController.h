@@ -2,6 +2,7 @@
 #include <vector>
 #include <algorithm>
 #include <deque>
+#include <map>
 #include <signal.h>
 #include <math.h>
 #include <cmath>
@@ -35,6 +36,16 @@ class CartesianPositionController {
  private:
     // Private Member Variables
     Eigen::VectorXd q, prevQDot, qDot{7};
+    Eigen::VectorXd jointLimitsMin{7}, jointLimitsMax{7}, jointMiddleValues{7}, jointRanges{7}, jointVelocityMax{7}, jointAccelerationMax{7}, jointJerkMax{7};
+    
+    // Parameters for the controller, set in config/fr3.yaml
+    double jointVelocityMaxMultiplier; // Multiplier to account for safety margins
+    double jointAccelerationMaxMultiplier; // Multiplier to account for safety margins
+    double jointJerkMaxMultiplier; // Multiplier to account for safety margins
+    double precisionThreshold; // (m) Range for the controller to slow down near the goal
+    double transferVelocity; // (m/s) Flat target velocity when not near the goal
+    double targetVelocityUpperLimit; // (m/s) Upper limit for the target velocity
+    double trackingAccel; // (m/s^2)/cycle Step increment for tracking the commanded velocity
 
     Eigen::VectorXd current_Qdot{7};
     Eigen::MatrixXd J, Jpinv, joint_positions;
@@ -57,6 +68,7 @@ class CartesianPositionController {
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr test_pub;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr goal_pub;
     rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr logging_array_pub;
+    std::map<std::string, rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr> logging_array_pub_map;
 
     bool robotInContact = false;
 
@@ -78,6 +90,19 @@ class CartesianPositionController {
 
     Eigen::Vector3d EEVelocity;
 
+    // Ramp-up for joint velocities
+    double alpha_ramp_duration_sec{10.0};
+    rclcpp::Time alpha_start_time;
+    bool alpha_started{false};
+    double getRampFactor();
+
+   // Debugging function to check for jerk violations
+   Eigen::VectorXd prevPrevQDot{7};
+    void checkJerkViolations(const Eigen::VectorXd& current_velocities, 
+         const Eigen::VectorXd& prev_velocities,
+         const Eigen::VectorXd& prev_prev_velocities,
+         double dt);
+
     //Helper Functions
     void JointStateCallback(const sensor_msgs::msg::JointState::SharedPtr scan);
     void ExternalCartesianWrenchCallback(const std_msgs::msg::Float64MultiArray::SharedPtr msg);
@@ -91,6 +116,7 @@ class CartesianPositionController {
     Eigen::Vector3d getClosestPointOnLine(Eigen::Vector3d & a, Eigen::Vector3d & b, Eigen::Vector3d & p, double & t);
     Eigen::VectorXd EEVelocityToQDot(Eigen::Vector3d desiredEEVelocity);
     Eigen::VectorXd EEVelocityToQDotRepulsive(Eigen::Vector3d desiredEEVelocity, std::vector<Eigen::Vector3d> obstaclePositionVectors);
+    Eigen::Vector3d getDesiredEEVelocity(const Eigen::Vector3d &positionError, const Eigen::Vector3d &EEVelocityVector);
 
     void setJointLimits(std::shared_ptr<rclcpp::Node> node_handle);
     void getControlPoints();
@@ -128,5 +154,6 @@ class CartesianPositionController {
     // Debugging
     void publishGoal(Eigen::Vector3d goal);
     void publishLoggingArray(Eigen::VectorXd vector);
+    void publishLoggingArray(Eigen::VectorXd vector, std::string topicName);
 
 };

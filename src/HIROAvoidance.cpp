@@ -119,7 +119,6 @@ void HIROAvoidance::getVelocityLimits(Eigen::VectorXd& lowerBound, Eigen::Vector
     // Note: Logging removed - was: loggingPublisher_.publishControlPointConstrains(...)
 }
 
-
 Eigen::MatrixXd HIROAvoidance::getHMatrix(Eigen::VectorXd& q, Eigen::Vector3d& xDot, bool drop_goal)
 {
         if (!drop_goal){

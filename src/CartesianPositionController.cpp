@@ -42,35 +42,133 @@ void CartesianPositionController::publishLoggingArray(Eigen::VectorXd vector)
     logging_array_pub->publish(msg);
 }
 
+void CartesianPositionController::publishLoggingArray(Eigen::VectorXd vector, std::string topicName)
+{
+    std_msgs::msg::Float64MultiArray msg;
+    msg.data.resize(vector.size());
+    for (int i = 0; i < vector.size(); i++) {
+        msg.data[i] = vector(i);
+    }
+    
+    // Check if publisher for this topic already exists, otherwise create it
+    if (logging_array_pub_map.find(topicName) == logging_array_pub_map.end()) {
+        logging_array_pub_map[topicName] = n->create_publisher<std_msgs::msg::Float64MultiArray>(topicName, 1);
+        RCLCPP_INFO(n->get_logger(), "Created new publisher for topic: %s", topicName.c_str());
+    }
+    
+    logging_array_pub_map[topicName]->publish(msg);
+}
+// Sigmoid ramp-up function to prevent initial jerk discontinuities
+double CartesianPositionController::getRampFactor(){
+    if (!alpha_started) {
+        alpha_start_time = n->now();
+        alpha_started = true;
+        return 0.0;
+    }
+    rclcpp::Time now = n->now();
+    double elapsed = (now - alpha_start_time).seconds();
+    if (elapsed <= 0.0) {
+        return 0.0;
+    }
+    if (elapsed >= alpha_ramp_duration_sec) {
+        return 1.0;
+    }
+    // Smoothstep S-curve: 3x^2 - 2x^3 for x in [0,1]
+    double x = elapsed / alpha_ramp_duration_sec;
+    // return x * x * (3.0 - 2.0 * x);
+    return x;
+}
+
 /*
     set the joint limits for the robot,
     position, velocity, and acceleration limits
 */
 void CartesianPositionController::setJointLimits(std::shared_ptr<rclcpp::Node> node_handle){
-    Eigen::VectorXd jointLimitsMin{7}, jointLimitsMax{7}, jointMiddleValues{7}, jointRanges{7}, jointVelocityMax{7}, jointAccelerationMax{7};
+    // Eigen::VectorXd jointLimitsMin{7}, jointLimitsMax{7}, jointMiddleValues{7}, jointRanges{7}, jointVelocityMax{7}, jointAccelerationMax{7};
 
     // Updated for the fr3 robot
     jointLimitsMin << -2.9007, -1.8361, -2.9007, -3.0770, -2.8763, 0.4398, -3.0508;
     jointLimitsMax << +2.9007, +1.8361, +2.9007, -0.1169, +2.8763, +4.6216, +3.0508;
     jointVelocityMax << 2.62, 2.62, 2.62, 2.62, 5.26, 4.18, 5.26;
     jointAccelerationMax << 10, 10, 10, 10, 10, 10, 10;
+    jointJerkMax << 3000, 3000, 3000, 3000, 3000, 3000, 3000; // (rad/s^3) (Guesstimate, TODO: update with actual values)
 
+    // Declare parameters before getting them
+    if (!this->n->has_parameter("joint_velocity_max_multiplier")) {
+        this->n->declare_parameter("joint_velocity_max_multiplier", 1.0);
+    }
+    if (!this->n->has_parameter("joint_acceleration_max_multiplier")) {
+        this->n->declare_parameter("joint_acceleration_max_multiplier", 1.0);
+    }
+    if (!this->n->has_parameter("joint_jerk_max_multiplier")) {
+        this->n->declare_parameter("joint_jerk_max_multiplier", 1.0);
+    }
+    if (!this->n->has_parameter("precision_threshold")) {
+        this->n->declare_parameter("precision_threshold", 0.1);
+    }
+    if (!this->n->has_parameter("transfer_velocity")) {
+        this->n->declare_parameter("transfer_velocity", 0.05);
+    }
+    if (!this->n->has_parameter("target_velocity_upper_limit")) {
+        this->n->declare_parameter("target_velocity_upper_limit", 0.1);
+    }
+    if (!this->n->has_parameter("tracking_accel")) {
+        this->n->declare_parameter("tracking_accel", 0.00001);
+    }
+    jointVelocityMaxMultiplier = this->n->get_parameter("joint_velocity_max_multiplier").as_double();
+    RCLCPP_INFO(this->n->get_logger(), "\n\nJoint velocity max multiplier: %f", jointVelocityMaxMultiplier);
+    jointAccelerationMaxMultiplier = this->n->get_parameter("joint_acceleration_max_multiplier").as_double();
+    RCLCPP_INFO(this->n->get_logger(), "Joint acceleration max multiplier: %f", jointAccelerationMaxMultiplier);
+    jointJerkMaxMultiplier = this->n->get_parameter("joint_jerk_max_multiplier").as_double();
+    RCLCPP_INFO(this->n->get_logger(), "Joint jerk max multiplier: %f", jointJerkMaxMultiplier);
+    precisionThreshold = this->n->get_parameter("precision_threshold").as_double();
+    RCLCPP_INFO(this->n->get_logger(), "Precision threshold: %f", precisionThreshold);
+    transferVelocity = this->n->get_parameter("transfer_velocity").as_double();
+    RCLCPP_INFO(this->n->get_logger(), "Transfer velocity: %f", transferVelocity);
+    targetVelocityUpperLimit = this->n->get_parameter("target_velocity_upper_limit").as_double();
+    RCLCPP_INFO(this->n->get_logger(), "Target velocity upper limit: %f\n\n", targetVelocityUpperLimit);
+    trackingAccel = this->n->get_parameter("tracking_accel").as_double();
+    RCLCPP_INFO(this->n->get_logger(), "Tracking acceleration: %f\n\n", trackingAccel);
 
-    //TODO: remove hard limits on joint vel and acc
-    // jointAccelerationMax = jointAccelerationMax * 0.001;
-    jointAccelerationMax = jointAccelerationMax * 0.3;
-    // TODO(peasant98) -- why is this needed?
-    jointVelocityMax = jointVelocityMax * 0.5;
+    // Apply multipliers to the joint limits to account for safety margins
+    jointAccelerationMax = jointAccelerationMax * jointAccelerationMaxMultiplier * rate.period().seconds;
+    jointVelocityMax = jointVelocityMax * jointVelocityMaxMultiplier;
+    jointJerkMax = jointJerkMax * jointJerkMaxMultiplier;
 
     jointMiddleValues = 0.5 * (jointLimitsMax + jointLimitsMin);
     jointRanges = jointLimitsMax - jointLimitsMin;
 
-    this->jointLimits = JointLimits(jointLimitsMin, jointLimitsMax, jointMiddleValues, jointRanges, jointVelocityMax, jointAccelerationMax);
+    this->jointLimits = JointLimits(jointLimitsMin, jointLimitsMax, jointMiddleValues, jointRanges, jointVelocityMax, jointAccelerationMax, jointJerkMax);
     hiroAvoidance = HIROAvoidance(this->jointLimits, node_handle);
     qpAvoidance = QPAvoidance(this->jointLimits);
 
     q.resize(7);
 }
+
+void CartesianPositionController::checkJerkViolations(const Eigen::VectorXd& current_velocities, 
+    const Eigen::VectorXd& prev_velocities,
+    const Eigen::VectorXd& prev_prev_velocities,
+    double dt) {
+
+    // Check for jerk violations and print warnings
+
+    Eigen::VectorXd accel = (current_velocities - prev_velocities) / dt;
+    Eigen::VectorXd prev_accel = (prev_velocities - prev_prev_velocities) / dt;
+    Eigen::VectorXd jerk = (accel - prev_accel) / dt;
+
+    publishLoggingArray(accel, "cmd/acceleration");
+    publishLoggingArray(jerk, "cmd/jerk");
+
+    for (int i = 0; i < jointLimits.jointJerkMax.size(); i++) {
+        if (std::abs(jerk(i)) > jointLimits.jointJerkMax(i)) {
+            RCLCPP_WARN(n->get_logger(), 
+            "Joint %d jerk violation: %.2f rad/s^3 (limit: %.2f)", 
+            i+1, std::abs(jerk(i)), jointLimits.jointJerkMax(i));
+            // current_velocities(i) = prev_velocities(i) + std::clamp(current_velocities(i)-prev_velocities(i), -jointLimits.jointAccelerationMax(i), jointLimits.jointAccelerationMax(i));
+        }
+    }
+}
+
 
 /*
     get the control points.
@@ -101,12 +199,7 @@ void CartesianPositionController::createRosPubsSubs(){
     subscriberControllerSwitch = n->create_subscription<std_msgs::msg::String>("/controller_switch", 1,
                                                        std::bind(&CartesianPositionController::ControllerSwitchCallback, this, std::placeholders::_1));
 
-
-    //TODO: Remove these publishers
-    // All visualization is done inside of each controller class 
-    // Throught he LoggerPublisher
-    // arrow_publisher =  n->create_publisher<std_msgs::msg::Float64>("/contact_threshold",1);
-    // test_pub =  n->create_publisher<std_msgs::msg::Float64>("/current_vel_des",1);
+    // Debugging publishers
     goal_pub = n->create_publisher<sensor_msgs::msg::PointCloud2>("/goal_pointcloud",1);
     logging_array_pub = n->create_publisher<std_msgs::msg::Float64MultiArray>("/logging_array",1);
 
@@ -653,56 +746,19 @@ void CartesianPositionController::moveToPositionOneStep(const Eigen::Vector3d de
     Eigen::Vector3d EEVelocityVector = getEEVelocity();
     publishGoal(desiredPositionVector);
     positionError = desiredPositionVector - endEffectorPosition;
-    desiredEEVelocity = positionError;
-    publishLoggingArray(positionError);
-    double norm = desiredEEVelocity.norm();
-    double velNorm = EEVelocityVector.norm();
+
+    Eigen::VectorXd errorData = Eigen::VectorXd(4);
+    errorData << positionError(0), positionError(1), positionError(2), positionError.norm();
+    publishLoggingArray(errorData);
 
     // Limit the desired velocity if it is too large
     if (robotInContact) {
         current_vel_one_step = 0.0;
     }
 
-    // Limit the robot's change in acceleration. This is an upper bound on the velocity.
-    double accel_limit = 0.0001;
-    // double accel_limit = 1.0;
-    double vel_upper_limit = 1.0;
-    double vel_lower_threshold = 0.1; // Set this to 0.0 to disable slowing down near the goal.
-    double transfer_velocity = 0.5; // Flat velocity when not near the goal.
-    double target_velocity = 0.0;
-    // if(norm > vel_upper_limit || !isEnd){
-    //     current_vel_one_step = std::min(vel_upper_limit, current_vel_one_step + accel_limit);
-    //     desiredEEVelocity = current_vel_one_step * desiredEEVelocity.normalized();
-    // } else if (norm < vel_lower_limit) 
-    // {
-    //     current_vel_one_step = std::min(norm, current_vel_one_step + accel_limit);
-    //     desiredEEVelocity = current_vel_one_step * desiredEEVelocity.normalized();
-    // } else {
-    //     current_vel_one_step = std::min(transfer_velocity, current_vel_one_step + accel_limit);
-    //     desiredEEVelocity = current_vel_one_step * desiredEEVelocity.normalized();
-    // }
-    if(norm > vel_upper_limit || !isEnd){
-        target_velocity = vel_upper_limit;
-    } else if (norm < vel_lower_threshold) 
-    {
-        target_velocity = norm;
-    } else {
-        target_velocity = transfer_velocity;
-    }
-    double diff = target_velocity - current_vel_one_step;
-
-    if(diff >= accel_limit){
-        current_vel_one_step = current_vel_one_step + accel_limit;
-    } else if(diff <= -accel_limit){
-        current_vel_one_step = current_vel_one_step - accel_limit;
-    } else {
-        current_vel_one_step = target_velocity;
-    }
-    desiredEEVelocity = current_vel_one_step * desiredEEVelocity.normalized();
-
+    desiredEEVelocity = getDesiredEEVelocity(positionError, EEVelocityVector);
 
     rclcpp::spin_some(n);
-
 
     const std::lock_guard<std::mutex> lock(mutex);
     joint_positions = kdlSolver.forwardKinematicsJoints(q);
@@ -713,6 +769,7 @@ void CartesianPositionController::moveToPositionOneStep(const Eigen::Vector3d de
             break;
         case HIRO:
         {
+            
             qDot = hiroAvoidance.computeJointVelocities(q, desiredEEVelocity,
                                                     obstaclePositionVectors,
                                                     closestPointsOnRobot, rate, 
@@ -726,6 +783,12 @@ void CartesianPositionController::moveToPositionOneStep(const Eigen::Vector3d de
             //                                             closestPointsOnRobot, rate, endEffectorPosition, desiredPositionVector, EEVelocity,
                                                         // robotInContact);
 
+            qDot *= getRampFactor();
+
+            //Debugging: Check for jerk violations
+            checkJerkViolations(qDot, prevQDot, prevPrevQDot, std::chrono::duration<double>(rate.period()).count());
+            prevPrevQDot = prevQDot;
+            prevQDot = qDot;
 
             jointVelocityController.sendVelocities(qDot);
             break;
@@ -832,3 +895,37 @@ Eigen::Vector3d CartesianPositionController::getEEPosition(){
     return endEffectorPosition;
 }
 
+Eigen::Vector3d CartesianPositionController::getDesiredEEVelocity(const Eigen::Vector3d &positionError, const Eigen::Vector3d &EEVelocityVector){
+
+        double positionNorm = positionError.norm();
+        double currentVelocityNorm = EEVelocityVector.norm();
+        // Limit the robot's change in acceleration. This is an upper bound on the velocity.
+        // double accel_limit = 0.0001; // (m/s^2)/cycle
+        // double accel_limit = 1.0;
+        // double vel_upper_limit = 1.0; // (m/s)
+        double targetVelocity = transferVelocity * positionNorm;
+
+        if(targetVelocity > targetVelocityUpperLimit){ // Restrict the velocity to the upper limit
+            targetVelocity = targetVelocityUpperLimit;
+        }
+        
+        // if (positionNorm < precisionThreshold){ // Slow down near the goal
+        //     targetVelocity = positionNorm;
+        // } else { // Flat target velocity when not near the goal
+        //     targetVelocity = transferVelocity;
+        // }
+
+        return targetVelocity * positionError.normalized();
+
+        // Update the current velocity in the direction of the target velocity
+        // TODO: Carson - Should this be handled directly when solving the QP? I noticed large discontinuities in the velocity without this.
+        // double diff = targetVelocity - current_vel_one_step;
+        // if(diff >= trackingAccel){
+        //     current_vel_one_step = current_vel_one_step + trackingAccel;
+        // } else if(diff <= -trackingAccel){
+        //     current_vel_one_step = current_vel_one_step - trackingAccel;
+        // } else {
+        //     current_vel_one_step = targetVelocity;
+        // }
+        // return current_vel_one_step * positionError.normalized();
+}

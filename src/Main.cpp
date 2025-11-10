@@ -179,8 +179,8 @@ void moveToSubPoints(CartesianPositionController &controller){
 */
 void moveInCircle(CartesianPositionController &controller, double timeToComplete){
     double radius = 0.1;
-    Eigen::Vector3d start_pos = Eigen::Vector3d(0.5, radius, 0.35);
-    controller.moveToPosition(start_pos);
+    Eigen::Vector3d start_pos = Eigen::Vector3d(0.5, radius, 0.6);
+    // controller.moveToPosition(start_pos);
 
     Eigen::Vector3d trajectory;
     double theta = 0;
@@ -308,6 +308,7 @@ void holdStaticPose(CartesianPositionController &controller){
 
 void moveInBox(CartesianPositionController &controller){
 
+    RCLCPP_INFO(g_node->get_logger(), "Moving in box");
     Eigen::Vector3d trajectory, endEffectorPosition, positionError;
     Eigen::Vector3d goal = Eigen::Vector3d(0.4, -0.2, 0.35);
     std::vector<Eigen::Vector3d, Eigen::aligned_allocator<Eigen::Vector3d>> points;

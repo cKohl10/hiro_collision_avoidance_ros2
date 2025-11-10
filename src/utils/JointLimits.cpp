@@ -3,7 +3,7 @@
 
 JointLimits::JointLimits( Eigen::VectorXd jointLimitsMin, Eigen::VectorXd jointLimitsMax,
                           Eigen::VectorXd jointMiddleValues, Eigen::VectorXd jointRanges,
-                          Eigen::VectorXd jointVelocityMax, Eigen::VectorXd jointAccelerationMax) {
+                          Eigen::VectorXd jointVelocityMax, Eigen::VectorXd jointAccelerationMax, Eigen::VectorXd jointJerkMax) {
 
     this->jointLimitsMin = jointLimitsMin;
     this->jointLimitsMax = jointLimitsMax;
@@ -11,7 +11,7 @@ JointLimits::JointLimits( Eigen::VectorXd jointLimitsMin, Eigen::VectorXd jointL
     this->jointRanges = jointRanges;
     this->jointVelocityMax = jointVelocityMax;
     this->jointAccelerationMax = jointAccelerationMax;
-
+    this->jointJerkMax = jointJerkMax;
 }
 
 
@@ -23,6 +23,6 @@ JointLimits::JointLimits(const JointLimits& other){
     this->jointRanges = other.jointRanges;
     this->jointVelocityMax = other.jointVelocityMax;
     this->jointAccelerationMax = other.jointAccelerationMax;
-
+    this->jointJerkMax = other.jointJerkMax;
 }
 JointLimits::JointLimits(){}

@@ -2,8 +2,14 @@ from launch import LaunchDescription
 from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
+from ament_index_python.packages import get_package_share_directory
+import os
 
 def generate_launch_description():
+    # Get the path to the config file
+    config_dir = get_package_share_directory('hiro_collision_avoidance_ros2')
+    config_file = os.path.join(config_dir, 'config', 'fr3.yaml')
+    
     return LaunchDescription([
         # List of original nodes
         # - move_panda.launch
@@ -17,7 +23,10 @@ def generate_launch_description():
             executable='Main',
             name='Main',
             output='screen',
-            parameters=[{'avoidance_type': 'hiro', 'movement_type': 'static'}],
+            parameters=[
+                config_file,
+                {'avoidance_type': 'hiro', 'movement_type': 'static'}
+            ],
         ),
 
 

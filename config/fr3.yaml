@@ -4,3 +4,13 @@
     arm_id: "fr3"
     base_link: "fr3_link0"
     ee_link: "fr3_hand"
+
+    joint_velocity_max_multiplier: 0.5
+    joint_acceleration_max_multiplier: 0.5
+    relay_acceleration_max_multiplier: 0.0
+    joint_jerk_max_multiplier: 1.0
+
+    # trackingAccel: 0.00001
+    # precision_threshold: 0.0 # (m) Range for the controller to slow down near the goal
+    transfer_velocity: 0.5 # Multiplier of the position error to get the target velocity
+    target_velocity_upper_limit: 0.5 # (m/s) Upper limit for the target velocity

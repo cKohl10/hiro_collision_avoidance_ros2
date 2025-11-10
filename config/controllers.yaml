@@ -1,0 +1,5 @@
+hiro_joint_velocity_example_controller:
+  ros__parameters:
+    relay_acceleration_max_multiplier: 0.0
+
+
